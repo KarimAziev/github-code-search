@@ -1,0 +1,35 @@
+* github-code-search
+
+** Installation
+
+*** Manually
+
+Download repository and it to your load path in your init file:
+
+#+begin_src elisp :eval no
+
+(add-to-list 'load-path "/path/to/github-code-search/")
+
+(require 'github-code-search)
+
+#+end_src
+
+*** With use-package and straight
+
+#+begin_src elisp :eval no
+
+(use-package github-code-search
+  :straight (:repo "KarimAziev/github-code-search" :type git :host github)
+  :commands (github-code-search))
+
+#+end_src
+
+** Commands
+
++ ~github-code-search~
+Search code on github for a given language and filename.
+
+** Customization
+
++ ~github-code-search-word-browse-fn~
+Function to browse results of code search.

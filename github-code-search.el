@@ -278,6 +278,7 @@ When SEMICOLONS is given, the separator will be \";\"."
                (not (string-empty-p filename)))
       filename)))
 
+;;;###autoload
 (defun github-code-search ()
   "Search code on github for a given language and filename."
   (interactive)

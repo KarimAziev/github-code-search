@@ -242,9 +242,9 @@ When SEMICOLONS is given, the separator will be \";\"."
                          (lambda
                            (&rest args)
                            (funcall
-                            (apply-partially '<= (if keep-empty 1 2))
-                            (apply 'length args)))
-                         (mapcar (apply-partially 'delete nil)
+                            (apply-partially #'<= (if keep-empty 1 2))
+                            (apply #'length args)))
+                         (mapcar (apply-partially #'delete nil)
                                  query-alist)))))
     (url-build-query-string
      filtered-list semicolons keep-empty)))

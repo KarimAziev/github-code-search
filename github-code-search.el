@@ -53,6 +53,7 @@
 
 ;;; Code:
 
+(require 'transient)
 (defvar github-code-search-langs
   '("Emacs Lisp" "JavaScript" "TypeScript" "Org" "JSON" "NPM Config" "Shell"
     "ShellSession" "Git Attributes" "Git Config" "C#" "C++" "CoffeeScript" "CSS"
@@ -278,56 +279,88 @@ When SEMICOLONS is given, the separator will be \";\"."
     (url-build-query-string
      filtered-list semicolons keep-empty)))
 
-(defun github-code-search-read-language ()
-  "Read github language in minibuffer with completions."
-  (let* ((modes-alist `((emacs-lisp-mode . "Emacs Lisp")
-                        (typescript-mode . "Typescript")
-                        (js-mode . "Javascript")
-                        (org-mode . "Org")
-                        (python-mode . "Python")
-                        (clojurescript-mode . "Clojure")
-                        (sh-mode . "Shell")
-                        (json-mode . "JSON")))
-         (lang (completing-read
-                "Language: "
-                (append (list "None") github-code-search-langs)
-                nil t nil nil (cdr (assoc major-mode modes-alist)))))
-    (when (and lang
-               (not (string-empty-p lang))
-               (not (string= lang "None")))
-      lang)))
+(defun github-code-search-get-default-language ()
+  "Return default github language depending on `major-mode'."
+  (pcase major-mode
+    ((or 'emacs-lisp-mode 'lisp-interaction-mode)
+     "Emacs Lisp")
+    ((or 'typescript-ts-mode 'typescript-mode)
+     "Typescript")
+    ((or 'bash-ts-mode 'sh-mode)
+     "Shell")
+    ((or 'js-mode 'js-base-mode 'js2-mode)
+     "Javascript")
+    ((or 'json-ts-mode 'json-mode)
+     "JSON")
+    ((or 'clojurescript-mode 'clojure-mode)
+     "Clojure")
+    ('org-mode
+     "Org")))
 
-(defun github-code-search-read-filename ()
-  "Read filename for github code search."
+
+(defun github-code-search-read-filename (&optional prompt initial-input history)
+  "Read filename with PROMPT, INITIAL-INPUT and HISTORY for github code search."
   (let ((filename (read-string
-                   "Filename (empty if none): "
-                   (when buffer-file-name
-                     (file-name-nondirectory buffer-file-name)))))
+                   (or prompt "File: ")
+                   (or initial-input
+                       (when buffer-file-name
+                         (file-name-nondirectory buffer-file-name)))
+                   history)))
     (when (and filename
                (not (string-empty-p filename)))
       filename)))
 
-;;;###autoload
-(defun github-code-search ()
-  "Search code on github for a given language and filename."
+
+
+(defun github-code-search-make-query (code language filename)
+  "Search CODE on github for a given LANGUAGE and FILENAME."
+  (print (list code language filename))
+  (github-code-search-query-from-alist
+   (cond ((and filename (string-empty-p code))
+          `(("type" "filename")
+            ("l" ,language)
+            ("q" ,filename)))
+         (t `(("q" ,(if filename
+                        (concat "filename:" filename " " code)
+                      code))
+              ("l" ,language)
+              ("type" "Code"))))))
+
+(defun github-code-search-do ()
+  "Search from transient."
   (interactive)
-  (let ((filename (github-code-search-read-filename))
-        (lang (github-code-search-read-language))
-        (code (read-string "Code: " (github-code-search-word-or-region)))
-        (query)
-        (url))
-    (setq query (github-code-search-query-from-alist
-                 (cond ((and filename (string-empty-p code))
-                        `(("type" "filename")
-                          ("l" ,lang)
-                          ("q" ,filename)))
-                       (t `(("q" ,(if filename
-                                      (concat "filename:" filename " " code)
-                                    code))
-                            ("l" ,lang)
-                            ("type" "Code"))))))
-    (setq url (concat "https://github.com/search?" query))
-    (funcall github-code-search-word-browse-fn url)))
+  (let* ((args (transient-args transient-current-command))
+         (filename (transient-arg-value "--filename=" args))
+         (code (transient-arg-value "--code=" args))
+         (language (transient-arg-value "--language=" args)))
+    (funcall github-code-search-word-browse-fn
+             (concat "https://github.com/search?"
+                     (github-code-search-make-query
+                      code language filename)))))
+
+;;;###autoload (autoload 'github-code-search "github-code-search" nil t)
+(transient-define-prefix github-code-search ()
+  "Command dispatcher."
+  :value
+  (lambda ()
+    (delete nil
+            (list
+             (when-let* ((value (github-code-search-get-default-language))
+                         (l "--language="))
+               (concat l value))
+             (when-let* ((code (github-code-search-word-or-region))
+                         (l "--code="))
+               (concat l code)))))
+  ["Arguments"
+   ("c" "code" "--code="
+    :class transient-option
+    :always-read t)
+   ("l" "language" "--language="
+    :choices (lambda (&rest _)
+               github-code-search-langs))
+   ("f" "filename" "--filename=")]
+  ["Actions"
+   ("RET" "Run" github-code-search-do)])
 
 (provide 'github-code-search)
 ;;; github-code-search.el ends here

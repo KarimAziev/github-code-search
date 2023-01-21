@@ -317,11 +317,11 @@ When SEMICOLONS is given, the separator will be \";\"."
   (print (list code language filename))
   (github-code-search-query-from-alist
    (cond ((and filename (string-empty-p code))
-          `(("type" "filename")
+          `(("type" "path")
             ("l" ,language)
             ("q" ,filename)))
          (t `(("q" ,(if filename
-                        (concat "filename:" filename " " code)
+                        (concat "path:" filename " " code)
                       code))
               ("l" ,language)
               ("type" "Code"))))))
@@ -330,7 +330,7 @@ When SEMICOLONS is given, the separator will be \";\"."
   "Search from transient."
   (interactive)
   (let* ((args (transient-args transient-current-command))
-         (filename (transient-arg-value "--filename=" args))
+         (filename (transient-arg-value "--path=" args))
          (code (transient-arg-value "--code=" args))
          (language (transient-arg-value "--language=" args)))
     (funcall github-code-search-word-browse-fn
@@ -358,7 +358,7 @@ When SEMICOLONS is given, the separator will be \";\"."
    ("l" "language" "--language="
     :choices (lambda (&rest _)
                github-code-search-langs))
-   ("f" "filename" "--filename=")]
+   ("p" "path" "--path=" :class transient-option)]
   ["Actions"
    ("RET" "Run" github-code-search-do)])
 

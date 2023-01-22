@@ -314,7 +314,6 @@ When SEMICOLONS is given, the separator will be \";\"."
 
 (defun github-code-search-make-query (code language filename)
   "Search CODE on github for a given LANGUAGE and FILENAME."
-  (print (list code language filename))
   (github-code-search-query-from-alist
    (cond ((and filename (string-empty-p code))
           `(("type" "path")

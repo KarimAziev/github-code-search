@@ -3,10 +3,10 @@
 ;; Copyright (C) 2022 Karim Aziiev <karim.aziiev@gmail.com>
 
 ;; Author: Karim Aziiev <karim.aziiev@gmail.com>
-;; URL: https://github.com/KarimAziev/ohai-emacs
-;; Keywords: hypermedia
+;; URL: https://github.com/KarimAziev/github-code-search
+;; Keywords: tools
 ;; Version: 0.1.1
-;; Package-Requires: ((emacs "25.1"))
+;; Package-Requires: ((emacs "28.1"))
 
 ;; This file is NOT part of GNU Emacs.
 
@@ -325,6 +325,7 @@ When SEMICOLONS is given, the separator will be \";\"."
               ("l" ,language)
               ("type" "Code"))))))
 
+;;;###autoload
 (defun github-code-search-do ()
   "Search from transient."
   (interactive)

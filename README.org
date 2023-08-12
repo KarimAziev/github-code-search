@@ -1,35 +1,163 @@
-* github-code-search
+#+OPTIONS: ^:nil tags:nil
 
-** Installation
+* About
 
-*** Manually
+Search code on GitHub within Emacs.
 
-Download repository and it to your load path in your init file:
+[[./github-code-search-demo.gif]]
 
+* Table of Contents                                       :TOC_2_gh:QUOTE:
+#+BEGIN_QUOTE
+- [[#about][About]]
+- [[#requirements][Requirements]]
+- [[#installation][Installation]]
+  - [[#with-use-package-and-straightel][With use-package and straight.el]]
+  - [[#manual-installation][Manual installation]]
+- [[#setup][Setup]]
+- [[#usage][Usage]]
+  - [[#customization][Customization]]
+#+END_QUOTE
+
+* Requirements
+
+| Name                         | Version |
+|------------------------------+---------|
+| Emacs                        |    28.1 |
+| ~transient~                  |   0.4.1 |
+| ~ghub~                       |   3.6.0 |
+| ~github-explorer~ (optional) |   1.1.0 |
+
+
+* Installation
+
+** With use-package and straight.el
 #+begin_src elisp :eval no
-
-(add-to-list 'load-path "/path/to/github-code-search/")
-
-(require 'github-code-search)
-
-#+end_src
-
-*** With use-package and straight
-
-#+begin_src elisp :eval no
-
 (use-package github-code-search
-  :straight (:repo "KarimAziev/github-code-search" :type git :host github)
-  :commands (github-code-search))
-
+  :straight (github-code-search
+             :repo "KarimAziev/github-code-search"
+             :type git
+             :host github))
 #+end_src
 
-** Commands
+** Manual installation
 
-+ ~github-code-search~
-Search code on github for a given language and filename.
+Download the source code and put it wherever you like, e.g. into =~/.emacs.d/github-code-search/=
+
+#+begin_src shell :eval no
+git clone https://github.com/KarimAziev/github-code-search.git ~/.emacs.d/github-code-search/
+#+end_src
+
+Add the downloaded directory to the load path:
+
+#+begin_src elisp :eval no
+(add-to-list 'load-path "~/.emacs.d/github-code-search/")
+(require 'github-code-search)
+#+end_src
+
+* Setup
+=github-code-search= manages authentication through two customizable variables:
+
+- =github-code-search-user=: This variable should be set to a string containing your GitHub username.
+- =github-code-search-token=: This variable can either be a string containing the OAuth token or a symbol indicating where to fetch the OAuth token.
+
+*** Setting Up token
+
+Firsly, you need to ensure that you have [[https://github.com/settings/tokens][a GitHub API token]].
+
+1. Log in to your GitHub account and navigate to settings.
+2. Select the Developer settings option on the bottom of the sidebar.
+3. Here you'll see a Personal access tokens section, click on it.
+4. Click on "Generate new token", give your token a descriptive name.
+5. Click on Generate token at the bottom of the page. Be sure to copy your new personal access token now as you cannot see it again.
+
+After getting your token, you can supply it to =github-code-search= in one of two ways.
+
+*** Secure Way: Using auth-sources
+
+Emacs =auth-sources= provide a secure way to store your GitHub username and OAuth token.
+
+To employ this method, set =github-code-search-token= to the symbol =github-code-search=:
+
+#+begin_src elisp
+(setq github-code-search-token 'github-code-search)
+#+end_src
+
+Next, add an entry to your =auth-sources=:
+
+#+begin_src plaintext
+machine api.github.com login YOUR-GITHUB-USERNAME^github-code-search password YOUR-GITHUB-TOKEN
+#+end_src
+
+You can add this entry to your =~/.authinfo.gpg= file (recommended for secure, encrypted storage) or =~/.authinfo= (see variable =auth-sources=).
+
+You can read more in [[https://magit.vc/manual/forge/Token-Creation.html#Token-Creation][ghub]] manual, as =github-code-search= relies on the provided API.
+
+*** Insecure way
+
+While not recommended due to security issues, you can set =github-code-search-token= and =github-code-search-user= in your Emacs config file:
+
+#+begin_src elisp
+(setq github-code-search-user "your-github-username")
+(setq github-code-search-token "your-github-oauth-token")
+#+end_src
+
+#+begin_export html
+
+<details>
+  <summary>Another example</summary>
+
+```elisp
+(use-package github-code-search
+  :straight (github-code-search
+             :repo "KarimAziev/github-code-search"
+             :type git
+             :host github)
+  :config
+  (let ((default-directory user-emacs-directory))
+      (condition-case nil
+          (progn (setq github-code-search-user
+                       (car-safe
+                        (process-lines "git"
+                                       "config"
+                                       "user.name")))
+                 (setq github-code-search-token
+                       (or (ignore-errors
+                             (car-safe (process-lines "git" "config"
+                                                      "github.oauth-token")))
+                           github-code-search-token)))
+        (error (message "GitHub Token not found")))))
+```
+</details>
+#+end_export
+
+
+*Note*: In this method, your OAuth token will be stored as plain text in your emacs config file, which is insecure. Ensure your config file permissions are appropriately set to prevent unauthorized access.
+
+
+
+* Usage
+
+To run the GitHub code search in Emacs, use the command =M-x github-code-search=. This will open a menu for GitHub code search where you can enter a specific code query.
+
+After entering the search term, you can either press =RET= to load and display the results in Emacs Mode, or press =C-c C-o= to open the results in the browser.
+
+While displaying the results in Emacs, you can use the following commands:
+
+| Key   | Command                                              |
+|-------+------------------------------------------------------|
+| =RET= | Show full code result                                |
+| =.=   | Toggle the exactness of a GitHub code search         |
+| =e=   | Toggle the exactness of a GitHub code search         |
+| =u=   | Toggle the uniqueness of GitHub code search results  |
+| =+=   | Load next page                                       |
+| =g=   | Revert buffer                                        |
+
+You can edit keybinding by modifiyng ~github-code-search-results-mode-map~.
 
 ** Customization
 
-+ ~github-code-search-word-browse-fn~
-Function to browse results of code search.
+- =github-code-search-word-browse-fn=: Function to browse the results of a code search.
+- =github-code-search-user=: GitHub username for authentication.
+- =github-code-search-token=: GitHub access token or authentication source.
+- =github-code-search-per-page-limit=: Number of results displayed per page.
+

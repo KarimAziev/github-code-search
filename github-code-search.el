@@ -907,22 +907,6 @@ in the items list and highlighted in the search results."
       (github-code-search-insert-item item code)
       (insert ?\n (make-string 80 ?_) ?\n ?\n ?\n))
     (github-code-search-higlight-matches code)))
-(let* ((alist (directory-files default-directory))
-       (annotf (lambda (str)
-                 (concat " " (or (cdr (assoc str alist)) ""))))
-       (cycle-sort-fn (lambda (it) it))
-       (display-sort-fn (lambda (it)
-                          (seq-sort-by 'length '< it)))
-       (category 'file))
-  (completing-read "Candidates: "
-                   (lambda (str pred action)
-                     (if (eq action 'metadata)
-                         `(metadata
-                           (annotation-function . ,annotf)
-                           (cycle-sort-function . ,cycle-sort-fn)
-                           (category . ,category)
-                           (display-sort-function . ,display-sort-fn))
-                       (complete-with-action action alist str pred)))))
 
 (defun github-code-search-get-languages (str pred action)
   "Initialize and complete GitHub code search languages based on given parameters.

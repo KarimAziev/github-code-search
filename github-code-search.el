@@ -6,7 +6,7 @@
 ;; URL: https://github.com/KarimAziev/github-code-search
 ;; Keywords: tools
 ;; Version: 0.2.0
-;; Package-Requires: ((emacs "28.1") (transient "0.4.1") (ghub "3.6.0"))
+;; Package-Requires: ((emacs "29.1") (transient "0.4.1") (ghub "3.6.0"))
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;; This file is NOT part of GNU Emacs.
@@ -520,7 +520,7 @@ text matches a specific regular expression."
           text)))
      items)))
 
-(defun github-code-search-revert ()
+(defun github-code-search-revert (&rest _)
   "Revert the GitHub code search buffer and update it with new search results."
   (let ((filtered github-code-search-response)
         (label))
@@ -762,7 +762,7 @@ code."
     (define-key map (kbd "e") #'github-code-search-toggle-exact)
     (define-key map (kbd ".") #'github-code-search-toggle-exact)
     (define-key map (kbd "u") #'github-code-search-toggle-uniq)
-    (define-key map (kbd "g") #'github-code-search-revert)
+    (define-key map (kbd "g") #'revert-buffer)
     map)
   :global nil
   (if (not github-code-search-results-mode)

@@ -96,17 +96,15 @@ You can read more in [[https://magit.vc/manual/forge/Token-Creation.html#Token-C
 
 While not recommended due to security issues, you can set =github-code-search-token= and =github-code-search-user= in your Emacs config file:
 
+
 #+begin_src elisp
 (setq github-code-search-user "your-github-username")
 (setq github-code-search-token "your-github-oauth-token")
 #+end_src
 
-#+begin_export html
-
-<details>
-  <summary>Another example</summary>
-
-```elisp
+#+begin_details
+#+HTML: <summary>Another example</summary>
+#+begin_src elisp
 (use-package github-code-search
   :straight (github-code-search
              :repo "KarimAziev/github-code-search"
@@ -114,21 +112,20 @@ While not recommended due to security issues, you can set =github-code-search-to
              :host github)
   :config
   (let ((default-directory user-emacs-directory))
-      (condition-case nil
-          (progn (setq github-code-search-user
-                       (car-safe
-                        (process-lines "git"
-                                       "config"
-                                       "user.name")))
-                 (setq github-code-search-token
-                       (or (ignore-errors
-                             (car-safe (process-lines "git" "config"
-                                                      "github.oauth-token")))
-                           github-code-search-token)))
-        (error (message "GitHub Token not found")))))
-```
-</details>
-#+end_export
+    (condition-case nil
+        (progn (setq github-code-search-user
+                     (car-safe
+                      (process-lines "git"
+                                     "config"
+                                     "user.name")))
+               (setq github-code-search-token
+                     (or (ignore-errors
+                           (car-safe (process-lines "git" "config"
+                                                    "github.oauth-token")))
+                         github-code-search-token)))
+      (error (message "GitHub Token not found")))))
+#+end_src
+#+end_details
 
 
 *Note*: In this method, your OAuth token will be stored as plain text in your emacs config file, which is insecure. Ensure your config file permissions are appropriately set to prevent unauthorized access.

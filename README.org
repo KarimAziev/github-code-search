@@ -79,7 +79,7 @@ Emacs =auth-sources= provide a secure way to store your GitHub username and OAut
 To employ this method, set =github-code-search-token= to the symbol =github-code-search=:
 
 #+begin_src elisp
-(setq github-code-search-token 'github-code-search)
+(setq github-code-search-ghub-auth-info '("YOUR-GITHUB-USERNAME" . github-code-search))
 #+end_src
 
 Next, add an entry to your =auth-sources=:
@@ -96,41 +96,18 @@ You can read more in [[https://magit.vc/manual/forge/Token-Creation.html#Token-C
 
 While not recommended due to security issues, you can set =github-code-search-token= and =github-code-search-user= in your Emacs config file:
 
-
 #+begin_src elisp
-(setq github-code-search-user "your-github-username")
-(setq github-code-search-token "your-github-oauth-token")
+(setq github-code-search-ghub-auth-info '("your-github-username" . "YOUR-GITHUB-OAUTH-TOKEN"))
 #+end_src
 
-#+begin_details
-#+HTML: <summary>Another example</summary>
+If you logged in =gh= cli and want to reuse the user and oauth token you can use:
+
 #+begin_src elisp
-(use-package github-code-search
-  :straight (github-code-search
-             :repo "KarimAziev/github-code-search"
-             :type git
-             :host github)
-  :config
-  (let ((default-directory user-emacs-directory))
-    (condition-case nil
-        (progn (setq github-code-search-user
-                     (car-safe
-                      (process-lines "git"
-                                     "config"
-                                     "user.name")))
-               (setq github-code-search-token
-                     (or (ignore-errors
-                           (car-safe (process-lines "git" "config"
-                                                    "github.oauth-token")))
-                         github-code-search-token)))
-      (error (message "GitHub Token not found")))))
+(setq github-code-search-ghub-auth-info #'github-code-search-auth-from-gh-config)
 #+end_src
-#+end_details
 
 
 *Note*: In this method, your OAuth token will be stored as plain text in your emacs config file, which is insecure. Ensure your config file permissions are appropriately set to prevent unauthorized access.
-
-
 
 * Usage
 

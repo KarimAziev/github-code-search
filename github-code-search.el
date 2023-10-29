@@ -52,44 +52,44 @@
 ;;; Code:
 
 (require 'transient)
+(require 'ghub)
 
 (declare-function json-read-from-string "json")
 
-(defvar github-code-search-langs-alist nil)
+(eval-and-compile)
+(declare-function json-read "json")
+(declare-function auth-source-forget "auth-source")
+(declare-function auth-info-password "auth-source")
+(declare-function auth-source-search "auth-source")
 
-(require 'ghub)
+(defcustom github-code-search-ghub-auth-info '("" . github-code-search)
+  "String of USERNAME^MARKER in auth sources."
+  :type '(radio
+          (cons :tag "Cons cell"
+                (string :tag "Github Username")
+                (radio
+                 :tag "Marker"
+                 (symbol :tag "Suffix" github-code-search)
+                 (string :tag "OAuth Token")))
+          (function-item  :tag "Use gh cli" github-code-search-auth-from-gh-config)
+          (function :tag "Custom Function"))
+  :group 'github-code-search)
 
 (defcustom github-code-search-word-browse-fn 'browse-url
   "Function to browse results of code search."
   :type 'function
   :group 'github-code-search)
 
-(defcustom github-code-search-user ""
-  "A string containing GitHub username."
-  :type 'string
-  :group 'github-code-search)
-
-(defcustom github-code-search-token 'github-code-search
-  "GitHub OAuth token or suffix added to the USERNAME^MARKER in auth sources.
-
-This variable can either hold an explicit OAuth token as a string,
-in which case `github-code-search' will use this token for authentication, or a
-symbol that is used as a suffix for the `login' field in `auth-sources'.
-
-For example, if you set this to the symbol `github-code-search', which is
-the default setting,you would add an entry like this to your auth-sources:
-
-\"machine api.github.com login GITHUB_USERNAME^github-code-search password
-GITHUB_TOKEN\"."
-  :type '(radio (string :tag "Github Token")
-                (symbol :tag "Auth source marker" github-code-search)
-                (function :tag "Function that returns the Github Token"))
-  :group 'github-code-search)
 
 (defcustom github-code-search-per-page-limit 100
   "The number of results per page. It should be the value between 30 to 100."
   :type 'integer
   :group 'github-code-sarch)
+
+(defvar github-code-search--cached-auth-data nil)
+
+(defvar github-code-search-langs-alist nil)
+
 
 (defvar github-code-search-langs nil)
 (defvar github-code-search-result-buffer-name "*github-code-search*")
@@ -102,66 +102,113 @@ GITHUB_TOKEN\"."
 (defvar-local github-code-search-page 1)
 (defvar-local github-code-search-uniq nil)
 
-(defun github-code-search-get-auth-source-users ()
-  "Return list of users in auth sources with host `api.github.com'."
-  (let ((all-users (delq nil (mapcar (lambda (pl)
-                                       (plist-get pl :user))
-                                     (auth-source-search
-                                      :host "api.github.com"
-                                      :require
-                                      '(:user :secret)
-                                      :max
-                                      most-positive-fixnum))))
-        (suffix (regexp-quote (concat "^"
-                                      (symbol-name github-code-search-token)))))
-    (or (seq-filter (apply-partially #'string-match-p suffix) all-users)
-        all-users)))
+
+(defun github-code-search-read-auth-marker ()
+  "Search for gh token in `auth-sources'."
+  (when-let ((variants
+              (seq-uniq
+               (auth-source-search
+                :host "api.github.com"
+                :require '(:user :secret)
+                :max most-positive-fixnum)
+               (lambda (a b)
+                 (equal (auth-info-password a)
+                        (auth-info-password b))))))
+    (pcase-let* ((users (seq-filter (apply-partially #'string-match-p "\\^")
+                                    (delq nil
+                                          (mapcar
+                                           (lambda (it)
+                                             (when (plist-get it :user)
+                                               (plist-get it :user)))
+                                           variants))))
+                 (user (if (> (length users) 1)
+                           (completing-read
+                            "Source:\s"
+                            users
+                            nil t)
+                         (read-string "User: " (car users))))
+                 (`(,user ,marker)
+                  (split-string user "\\^" t))
+                 (cell (cons user
+                             (if marker
+                                 (intern marker)
+                               (read-string "Ghub token: ")))))
+      (if (yes-or-no-p "Save for future?")
+          (customize-save-variable 'github-code-search-ghub-auth-info cell
+                                   "Saved by github-code-search")
+        (setq github-code-search-ghub-auth-info cell))
+      github-code-search-ghub-auth-info)))
+
+
+(defun github-code-search--auth-source-get (keys &rest spec)
+  "Retrieve authentication data for GitHub repositories.
+
+Argument KEYS is a list of keys for which values are to be retrieved from
+the authentication source.
+
+Optional argument SPEC is a variable argument list that specifies the
+search criteria for the authentication source."
+  (declare (indent 1))
+  (let ((plist (car (apply #'auth-source-search
+                           (append spec (list :max 1))))))
+    (mapcar (lambda (k)
+              (plist-get plist k))
+            keys)))
+
+(defun github-code-search-auth (&optional force)
+  "Authenticate a GitHub repository, optionally forcing a `re-authentication'.
+
+Optional argument FORCE is a boolean.
+If non-nil, it forces the function to re-authenticate by clearing the cached
+authentication data.
+The default value is nil."
+  (require 'auth-source)
+  (when force (setq github-code-search--cached-auth-data nil))
+  (or github-code-search--cached-auth-data
+      (setq github-code-search--cached-auth-data
+            (pcase github-code-search-ghub-auth-info
+              ((pred functionp)
+               (funcall github-code-search-ghub-auth-info))
+              (`((and ,username
+                      (stringp ,username)
+                      (not (string-empty-p ,username)))
+                 .
+                 (and ,marker
+                      (symbolp ,marker)
+                      ,marker))
+               (let* ((user (format "%s^%s" username marker))
+                      (token
+                       (or (car (github-code-search--auth-source-get (list :secret)
+                                                                     :host "api.github.com"
+                                                                     :user user))
+                           (auth-source-forget (list
+                                                :host "api.github.com"
+                                                :user user
+                                                :max 1)))))
+                 (cons username
+                       (if (functionp token)
+                           (funcall token)
+                         token))))
+              (`((and ,username
+                      (stringp ,username)
+                      (not (string-empty-p ,username)))
+                 .
+                 (and ,marker
+                      (stringp ,marker)
+                      ,marker))
+               (cons username marker))
+              (_ (github-code-search-read-auth-marker))))))
 
 ;;;###autoload
-(defun github-code-search-change-user (&optional prompt initial-input history)
-  "Change the user for authentication prompting with string PROMPT.
-
-Optional argument PROMPT is the initial value to be displayed in the prompt.
-
-If non-nil, optional argument INITIAL-INPUT is a string to insert before
-reading.
-
-The third arg HISTORY, if non-nil, specifies a history list and optionally the
-initial position in the list."
+(defun github-code-search-change-user ()
+  "Search for gh token in `auth-sources'."
   (interactive)
-  (let ((user
-         (if (stringp github-code-search-token)
-             (read-string (or prompt "User: ") initial-input history)
-           (let* ((alist (mapcar (lambda (it)
-                                   (let ((parts (split-string it "[\\^]" t)))
-                                     (cons (pop parts)
-                                           (pop parts))))
-                                 (github-code-search-get-auth-source-users)))
-                  (annotf (lambda (str)
-                            (format "^%s" (cdr (assoc str alist)))))
-                  (login-name (completing-read (or prompt
-                                                   "Github user name: ")
-                                               (lambda (str pred action)
-                                                 (if (eq action 'metadata)
-                                                     `(metadata
-                                                       (annotation-function
-                                                        . ,annotf))
-                                                   (complete-with-action
-                                                    action alist
-                                                    str
-                                                    pred)))
-                                               nil
-                                               nil
-                                               initial-input
-                                               history))
-                  (marker (cdr (assoc login-name alist))))
-             (when-let ((marker (and marker (intern marker))))
-               (unless (eq marker github-code-search-token)
-                 (setq github-code-search-token marker)))
-             login-name))))
-    (if (string-empty-p user)
-        nil
-      user)))
+  (if github-code-search--cached-auth-data
+      (setq github-code-search--cached-auth-data nil)
+    (github-code-search-auth t))
+  (when transient-current-command
+    (transient-setup transient-current-command)))
+
 
 (defun github-code-search-word-or-region ()
   "Get current word or region."
@@ -225,26 +272,6 @@ When SEMICOLONS is given, the separator will be \";\"."
      "json")
     ((or 'clojurescript-mode 'clojure-mode) "clojure")
     ('org-mode "org")))
-
-(defun github-code-search-make-query (code language filename &rest params)
-  "Search CODE on github for a given LANGUAGE and FILENAME.
-PARAMS is added to q."
-  (let* ((type (cond ((and filename (or (not code)
-                                        (string-empty-p code)))
-                      "path")
-                     (t "Code")))
-         (q (string-join
-             (append
-              (list (if filename
-                        (concat "path:" filename " " code)
-                      code))
-              (when language
-                (list (concat " language:" language)))
-              (remove nil params))
-             "")))
-    (github-code-search-query-from-alist
-     `(("q" ,q)
-       ("type" ,type)))))
 
 (defun github-code-search-json-parse-string (str &optional object-type
                                                  array-type null-object false-object)
@@ -312,47 +339,74 @@ represent a JSON false value.  It defaults to `:false'."
           (buffer-string))
       (kill-buffer download-buffer))))
 
+(defun github-code-search-get-browse-query ()
+  "Open results in browser."
+  (let* ((code (github-code-search-get-arg-value-from-args "code"))
+         (path (github-code-search-get-arg-value-from-args "path"))
+         (query
+          (replace-regexp-in-string "[+]" " "
+                                    (github-code-search-format-args-to-query
+                                     (seq-remove
+                                      (apply-partially
+                                       #'string-match-p
+                                       "^--\\(path\\|code\\)=")
+                                      (github-code-search-get-args-for-query)))))
+         (type
+          (cond ((and path (or (not code)
+                               (string-empty-p code)))
+                 "path")
+                (t "Code")))
+         (q (string-join (list (if path
+                                   (concat "path:" path " " (or code ""))
+                                 code)
+                               query)
+                         " "))
+         (query-url (github-code-search-query-from-alist
+                     `(("q" ,q)
+                       ("type" ,type)))))
+    query-url))
+
+;;;###autoload
+(defun github-code-search-browse-gists ()
+  "Open results in browser."
+  (interactive)
+  (funcall github-code-search-word-browse-fn
+           (concat "https://gist.github.com/search?"
+                   (github-code-search-get-browse-query))))
 
 ;;;###autoload
 (defun github-code-search-browse ()
   "Open results in browser."
   (interactive)
-  (let* ((args (transient-args transient-current-command))
-         (filename (transient-arg-value "--path=" args))
-         (code (transient-arg-value "--code=" args))
-         (language (transient-arg-value "--language="
-                                        args))
-         (user (transient-arg-value "--user=" args))
-         (not-user (transient-arg-value "--not-user=" args)))
-    (funcall github-code-search-word-browse-fn
-             (concat "https://github.com/search?"
-                     (github-code-search-make-query
-                      code language filename
-                      (when user (concat " user:" user))
-                      (when not-user (concat " -user:" not-user)))))))
-
-(defun github-code-search-render-text-match (item)
-  "Highlight text matches in a GitHub code search result.
-
-Argument ITEM is an alist containing the fragment and matches for a text match
-in a GitHub code search."
-  (let ((frag (alist-get 'fragment item))
-        (matches (alist-get 'matches item)))
-    (dolist (alist matches)
-      (let-alist alist
-        .indices
-        (add-text-properties (car .indices)
-                             (cadr .indices) '(face highlight)
-                             frag)))
-    frag))
-
-(defun github-code-search-auth ()
-  "Prompt user to enter GitHub username for code search."
-  (while (or (not github-code-search-user)
-             (string-empty-p github-code-search-user))
-    (setq github-code-search-user (github-code-search-change-user "User: "))))
+  (funcall github-code-search-word-browse-fn
+           (concat "https://github.com/search?"
+                   (github-code-search-get-browse-query))))
 
 
+
+(defun github-code-search-auth-from-gh-config ()
+  "Extract and return GitHub username and OAuth token from gh config file."
+  (pcase-let* ((`(,username . ,file)
+                (with-temp-buffer
+                  (when (zerop
+                         (call-process
+                          "gh" nil t
+                          nil "auth" "status"))
+                    (re-search-backward
+                     "Logged in to github.com as \\([a-zA-Z0-9-]*[a-zA-Z0-9]\\{1\\}\\)[\s\t\n]+[(]\\([^)]+\\)[)]"
+                     nil t 1)
+                    (cons (match-string-no-properties 1)
+                          (match-string-no-properties 2)))))
+               (token (and username file
+                           (file-exists-p file)
+                           (with-temp-buffer
+                             (insert-file-contents file)
+                             (when (re-search-forward
+                                    "github\\.com:[\s\n]+oauth_token:[\s]+\\([^\n]+\\)"
+                                    nil t 1)
+                               (match-string-no-properties
+                                1))))))
+    (and token (cons username token))))
 
 (defun github-code-search-popup (content &optional buffer fn &rest args)
   "Display GitHub code search CONTENT in a popup window.
@@ -380,7 +434,6 @@ Argument FN is extra function to apply with ARGS."
               (when fn
                 (apply fn args))))))))
 
-
 (defun github-code-search-async-request (code query page callback)
   "Send an asynchronous request to GitHub's CODE search API.
 
@@ -393,37 +446,36 @@ user wants to view.
 Argument CALLBACK is a function that will be called once the search
 results are returned, with the search results passed as an argument."
   (github-code-search-auth)
-  (ghub-request "GET" (format "search/code?q=%s&per_page=100&page=%s"
-                              (concat
-                               code
-                               (or
-                                query
-                                ""))
-                              page)
-                nil
-                :auth github-code-search-token
-                :username github-code-search-user
-                :headers
-                `(("Accept" . "application/vnd.github.text-match+json"))
-                :forge 'github
-                :host "api.github.com"
-                :callback
-                (lambda (value _headers _status _req)
-                  (let ((buffer (get-buffer
-                                 github-code-search-result-buffer-name)))
-                    (when (and
-                           (buffer-live-p
-                            buffer)
-                           (equal code
-                                  (buffer-local-value
-                                   'github-code-search--search-code
-                                   buffer))
-                           (equal query
-                                  (buffer-local-value
-                                   'github-code-search--search-extra-query
-                                   buffer)))
-                      (when callback
-                        (funcall callback value)))))))
+  (let ((q (string-join (delq nil
+                              (list code query))
+                        "")))
+    (ghub-request "GET"
+                  (concat "search/code?q=" q
+                          (format "&per_page=100&page=%s" page))
+                  nil
+                  :auth (cdr github-code-search--cached-auth-data)
+                  :username (car github-code-search--cached-auth-data)
+                  :headers
+                  `(("Accept" . "application/vnd.github.text-match+json"))
+                  :forge 'github
+                  :host "api.github.com"
+                  :callback
+                  (lambda (value _headers _status _req)
+                    (let ((buffer (get-buffer
+                                   github-code-search-result-buffer-name)))
+                      (when (and
+                             (buffer-live-p
+                              buffer)
+                             (equal code
+                                    (buffer-local-value
+                                     'github-code-search--search-code
+                                     buffer))
+                             (equal query
+                                    (buffer-local-value
+                                     'github-code-search--search-extra-query
+                                     buffer)))
+                        (when callback
+                          (funcall callback value))))))))
 
 (defun github-code-search-next-page (&rest _)
   "Increment the page number and request the next page of GitHub code search."
@@ -433,16 +485,6 @@ results are returned, with the search results passed as an argument."
                               github-code-search--search-extra-query
                               github-code-search-exact
                               github-code-search-uniq))
-
-(defun github-code-search-count-rendered-items ()
-  "Remove the footer from the GitHub code search results."
-  (save-excursion
-    (goto-char (point-min))
-    (let ((count 0))
-      (while (text-property-search-forward
-              'github-code-search-item)
-        (setq count (1+ count)))
-      count)))
 
 (defun github-code-search-delete-footer ()
   "Remove the footer from the GitHub code search results."
@@ -710,35 +752,19 @@ code."
                 #'github-code-search-load-code-result-at-point)
     map))
 
-
 ;;;###autoload
 (defun github-code-search-code ()
   "Search from transient."
   (interactive)
+  (github-code-search-auth)
   (let* ((args (transient-args transient-current-command))
-         (code (transient-arg-value "--code=" args))
+         (code (github-code-search-get-arg-value-from-args "code"))
+         (query (github-code-search-format-args-to-query
+                 (seq-remove (apply-partially #'string-match-p "^--\\(code=\\)")
+                             (github-code-search-get-args-for-query))))
          (exact (transient-arg-value "--exact" args))
-         (uniq (transient-arg-value "--uniq" args))
-         (result (seq-reduce
-                  (lambda (acc arg)
-                    (let ((value
-                           (transient-arg-value arg args)))
-                      (if (not value)
-                          acc
-                        (let* ((neg (string-prefix-p "--not-" arg))
-                               (query (if neg
-                                          (replace-regexp-in-string
-                                           "\\(^--not-\\)\\|\\(=$\\)" ""
-                                           arg)
-                                        (replace-regexp-in-string "^--\\|=$" ""
-                                                                  arg)))
-                               (separator (if neg "+-" "+")))
-                          (setq acc (concat acc separator query ":" value))))))
-                  '("--path="
-                    "--language="
-                    "--not-user=")
-                  "")))
-    (github-code-search-request code result exact
+         (uniq (transient-arg-value "--uniq" args)))
+    (github-code-search-request code query exact
                                 uniq)))
 
 (defun github-code-search-load-code-result-at-point ()
@@ -805,6 +831,85 @@ code."
              (propertize msg 'face face))
        (force-mode-line-update)))
 
+
+(defun github-code-search-json-read-buffer (&optional object-type array-type null-object
+                                    false-object)
+  "Parse json from the current buffer using specified object and array types.
+
+The argument OBJECT-TYPE specifies which Lisp type is used
+to represent objects; it can be `hash-table', `alist' or `plist'.  It
+defaults to `alist'.
+
+The argument ARRAY-TYPE specifies which Lisp type is used
+to represent arrays; `array'/`vector' and `list'.
+
+The argument NULL-OBJECT specifies which object to use
+to represent a JSON null value.  It defaults to `:null'.
+
+The argument FALSE-OBJECT specifies which object to use to
+represent a JSON false value.  It defaults to `:false'."
+  (if (and (fboundp 'json-parse-string)
+           (fboundp 'json-available-p)
+           (json-available-p))
+      (json-parse-buffer
+       :object-type (or object-type 'alist)
+       :array-type
+       (pcase array-type
+         ('list 'list)
+         ('vector 'array)
+         (_ 'array))
+       :null-object (or null-object :null)
+       :false-object (or false-object :false))
+    (let ((json-object-type (or object-type 'alist))
+          (json-array-type
+           (pcase array-type
+             ('list 'list)
+             ('array 'vector)
+             (_ 'vector)))
+          (json-null (or null-object :null))
+          (json-false (or false-object :false)))
+      (json-read))))
+
+(defun github-code-search-fetch-git-tree (repo &optional callback)
+  "Fetch the git tree of a specified GitHub repository.
+
+Argument REPO is a string that represents the repository for which the git tree
+is to be fetched.
+
+Optional argument CALLBACK is a function that will be called with the fetched
+git tree as its argument.
+If not provided, the function will return the git tree directly."
+  (url-retrieve
+   (format "https://api.github.com/repos/%s/git/trees/HEAD:?recursive=1" repo)
+   (lambda (arg)
+     (if-let ((err (plist-get arg :error)))
+         (minibuffer-message (concat
+                              (format (propertize
+                                       "Error fetching: " 'face
+                                       'error)
+                                      repo)
+                              (format "%s " (or
+                                             (when-let ((type
+                                                         (ignore-errors
+                                                           (cadr
+                                                            err))))
+                                               type)
+                                             err))
+                              (or
+                               (when-let ((status (ignore-errors (caddr err))))
+                                 (format "%s" status))
+                               "")))
+       (with-current-buffer (current-buffer)
+         (goto-char (point-min))
+         (re-search-forward "^$")
+         (delete-region (+ 1 (point))
+                        (point-min))
+         (goto-char (point-min))
+         (let ((tree (cdr (assq 'tree (github-code-search-json-read-buffer)))))
+           (if callback
+               (funcall callback tree)
+             tree)))))))
+
 (defun github-code-search-github-explorer (repo)
   "Retrieve and display the file structure of a specified GitHub repository.
 
@@ -812,6 +917,23 @@ Argument REPO is the name of the GitHub repository that the function will
 interact with."
   (when (and (fboundp 'github-explorer-paths--put)
              (fboundp 'github-explorer--tree))
+    (github-code-search-fetch-git-tree
+     repo
+     (lambda (tree)
+       (let ((paths
+              (delq nil
+                    (mapcar
+                     (lambda (x)
+                       (when (equal (cdr (assq 'type x)) "blob")
+                         (cdr (assoc 'path x))))
+                     tree))))
+         (github-explorer-paths--put repo
+                                     paths)
+         (github-explorer--tree repo
+                                (format
+                                 "https://api.github.com/repos/%s/git/trees/%s"
+                                 repo "HEAD")
+                                "/"))))
     (url-retrieve
      (format
       "https://api.github.com/repos/%s/git/trees/HEAD:?recursive=1"
@@ -826,18 +948,20 @@ interact with."
                 (delete-region (+ 1 (point))
                                (point-min))
                 (goto-char (point-min))
-                (let* ((paths
-                        (remove nil
-                                (mapcar
-                                 (lambda (x)
-                                   (if (equal
-                                        (cdr
-                                         (assoc
-                                          'type x))
-                                        "blob")
-                                       (cdr (assoc 'path x))))
-                                 (cdr (assoc 'tree
-                                             (json-read)))))))
+                (let*
+                    ((paths
+                      (remove nil
+                              (mapcar
+                               (lambda (x)
+                                 (if (equal
+                                      (cdr
+                                       (assoc
+                                        'type x))
+                                      "blob")
+                                     (cdr (assoc 'path x))))
+                               (cdr
+                                (assoc 'tree
+                                       (github-code-search-json-read-buffer)))))))
                   (github-explorer-paths--put repo paths)
                   (github-explorer--tree repo
                                          (format
@@ -860,7 +984,8 @@ search."
          (html_url (alist-get 'html_url item))
          (text-matches (alist-get 'text_matches item))
          (code (github-code-search-fontify (mapconcat
-                                            #'github-code-search-render-text-match
+                                            (apply-partially #'alist-get
+                                                             'fragment)
                                             text-matches
                                             "\n\n")
                                            (or name path)))
@@ -925,10 +1050,112 @@ candidates."
       nil
     (complete-with-action action github-code-search-langs str pred)))
 
+(defun github-code-search-queries-to-options (queries)
+  "Convert GitHub code search QUERIES into command line options.
+
+Argument QUERIES is a list."
+  (let* ((props-alist
+          '(("language" :choices
+             github-code-search-get-languages)
+            ("code"
+             :class transient-option
+             :always-read t)))
+         (items (mapcan
+                 (lambda (v)
+                   (let ((k (substring-no-properties v 0 1)))
+                     (list (append (list (format "%s" k) v (format
+                                                            "--%s=" v))
+                                   (cdr (assoc-string v
+                                                      props-alist)))
+                           (append (list (format "%s" (upcase k))
+                                         (format "not %s" v)
+                                         (format "--not-%s=" v))
+                                   (cdr (assoc-string v
+                                                      props-alist))))))
+                 queries)))
+    items))
+
+(defun github-code-search-make-incompatible-queries (queries)
+  "Generate incompatible QUERIES for GitHub code search.
+
+Argument QUERIES is a list of strings."
+  (mapcar (lambda (it)
+            (list (format "--%s=" it) (format "--not-%s=" it)))
+          queries))
+
+(defvar github-code-search-code-queries '("language"
+                                          "filename" "path"
+                                          "user"
+                                          "extension" "in"))
+
+
+(defun github-code-search-get-args-for-query ()
+  "Remove specific arguments from the GitHub code search query."
+  (seq-remove
+   (apply-partially  #'string-match-p "^--\\(exact\\|uniq\\)")
+   (github-code-search-get-arguments)))
+
+(defun github-code-search-get-arg-value-from-args (arg)
+  "Extract the ARG value from the argument list in a GitHub code search."
+  (when-let ((argument (seq-find
+                        (apply-partially #'string-match-p
+                                         (concat "--"
+                                                 (regexp-quote
+                                                  arg)
+                                                 "="))
+                        (github-code-search-get-args-for-query))))
+    (let ((parts
+           (split-string argument "=" t)))
+      (string-join (seq-drop parts 1) "="))))
+
+(defun github-code-search-query-description ()
+  "Formats a GitHub code search query based on specified arguments."
+  (format "search/code?q=%s"
+          (github-code-search-format-args-to-query
+           (github-code-search-get-args-for-query))))
+
+(defun github-code-search-get-arguments ()
+  "Return current transient arguments ARGS."
+  (let ((raw-args))
+    (cond (transient-current-command
+           (setq raw-args (transient-args transient-current-command)))
+          (transient--prefix
+           (setq transient-current-prefix transient--prefix)
+           (setq transient-current-command (oref transient--prefix command))
+           (setq transient-current-suffixes transient--suffixes)
+           (setq raw-args (transient-args transient-current-command))))
+    raw-args))
+
+(defun github-code-search-format-args-to-query (args)
+  "Generate a GitHub code search query from given arguments.
+
+Argument ARGS is a list of strings, each representing a search argument."
+  (seq-reduce
+   (lambda (acc argument)
+     (let* ((parts
+             (split-string argument "=" t))
+            (arg (pop parts))
+            (value (string-join parts "=")))
+       (if (not value)
+           acc
+         (let* ((neg (string-prefix-p "--not-" arg))
+                (query (if neg
+                           (replace-regexp-in-string
+                            "\\(^--not-\\)" ""
+                            arg)
+                         (replace-regexp-in-string "^--" ""
+                                                   arg)))
+                (separator (if neg "+-" "+")))
+           (setq acc (concat acc separator query ":" value))))))
+   args
+   ""))
+
+
 ;;;###autoload (autoload 'github-code-search "github-code-search" nil t)
 (transient-define-prefix github-code-search ()
   "A menu for GitHub code search with specific options."
-  :incompatible '(("--path=" "--language="))
+  :incompatible (github-code-search-make-incompatible-queries
+                 github-code-search-code-queries)
   :value
   (lambda ()
     (let* ((code (github-code-search-word-or-region))
@@ -948,20 +1175,43 @@ candidates."
                    (when (and buffer-file-name (not code-arg))
                      (concat "--path="
                              (file-name-nondirectory buffer-file-name)))))))))
-  ["Arguments"
-   ("c" "code" "--code="
-    :class transient-option
-    :always-read t)
-   ("l" "language" "--language="
-    :choices github-code-search-get-languages)
-   ("p" "path" "--path=" :class transient-option)
-   ("u" "user" "--user=" :class transient-option)]
+  [:description github-code-search-query-description
+                :setup-children
+                (lambda (&rest _argsn)
+                  (mapcar
+                   (apply-partially #'transient-parse-suffix
+                                    transient--prefix)
+                   (append (list
+                            (list "c" "code" "--code="
+                                  :class 'transient-option
+                                  :always-read t))
+                           (github-code-search-queries-to-options
+                            github-code-search-code-queries))))]
   ["Filtering"
-   ("U" "not-user" "--not-user=" :class transient-option)
-   ("e" "Exact matches" "--exact")
-   ("d" "Delete dublicates" "--uniq")]
+   ("x" "Exact matches" "--exact")
+   ("D" "Delete dublicates" "--uniq")]
+  ["Config"
+   ("*" github-code-search-change-user
+    :description (lambda ()
+                   (concat  "Github User: "
+                            (if
+                                (or (not (car-safe
+                                          github-code-search--cached-auth-data))
+                                    (string-empty-p
+                                     (car
+                                      github-code-search--cached-auth-data))
+                                    (not (cdr-safe
+                                          github-code-search--cached-auth-data)))
+                                "(not logged)"
+                              (propertize
+                               (substring-no-properties
+                                (or (car-safe
+                                     github-code-search--cached-auth-data)
+                                    ""))
+                               'face 'transient-value)))))]
   ["Actions"
-   ("C-c C-o" "Browse" github-code-search-browse)
+   ("g g" "Browse" github-code-search-browse)
+   ("g i" "github-code-search-browse-gists" github-code-search-browse-gists)
    ("RET" "Search" github-code-search-code)]
   (interactive)
   (transient-setup #'github-code-search))

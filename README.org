@@ -55,10 +55,8 @@ Add the downloaded directory to the load path:
 #+end_src
 
 * Setup
-=github-code-search= manages authentication through two customizable variables:
 
-- =github-code-search-user=: This variable should be set to a string containing your GitHub username.
-- =github-code-search-token=: This variable can either be a string containing the OAuth token or a symbol indicating where to fetch the OAuth token.
+=github-code-search= manages authentication through the customizable variable =github-code-search-ghub-auth-info=, which should be either a cons of (USERNAME . TOKEN) or a function that returns it. The TOKEN can be either a string containing the OAuth token, or a symbol indicating where to fetch the OAuth token.
 
 *** Setting Up token
 

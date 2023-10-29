@@ -63,7 +63,9 @@
 (declare-function auth-source-search "auth-source")
 
 (defcustom github-code-search-ghub-auth-info '("" . github-code-search)
-  "String of USERNAME^MARKER in auth sources."
+  "A cons of (USERNAME . TOKEN) or a function that returns it.
+The cdr can be either a string containing the OAuth token,
+or a symbol indicating where to fetch the OAuth token."
   :type '(radio
           (cons :tag "Cons cell"
                 (string :tag "Github Username")
@@ -71,7 +73,8 @@
                  :tag "Marker"
                  (symbol :tag "Suffix" github-code-search)
                  (string :tag "OAuth Token")))
-          (function-item  :tag "Use gh cli" github-code-search-auth-from-gh-config)
+          (function-item  :tag "Use gh cli"
+                          github-code-search-auth-from-gh-config)
           (function :tag "Custom Function"))
   :group 'github-code-search)
 

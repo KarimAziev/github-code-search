@@ -208,7 +208,7 @@ When SEMICOLONS is given, the separator will be \";\"."
      "yaml")
     ((or 'html-ts-mode 'html-mode)
      "html")
-    ((or 'css-ts-mode 'css-ts-mode)
+    ((or 'css-ts-mode 'css-mode)
      "css")
     ((or 'typescript-ts-mode
          'typescript-ts-base-mode
@@ -223,10 +223,8 @@ When SEMICOLONS is given, the separator will be \";\"."
      "javascript")
     ((or 'json-ts-mode 'json-mode)
      "json")
-    ((or 'clojurescript-mode 'clojure-mode)
-     "clojure")
-    ('org-mode
-     "org")))
+    ((or 'clojurescript-mode 'clojure-mode) "clojure")
+    ('org-mode "org")))
 
 (defun github-code-search-make-query (code language filename &rest params)
   "Search CODE on github for a given LANGUAGE and FILENAME.

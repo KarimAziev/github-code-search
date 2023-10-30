@@ -345,14 +345,14 @@ represent a JSON false value.  It defaults to `:false'."
 (defun github-code-search-get-browse-query ()
   "Open results in browser."
   (let* ((code (github-code-search-get-arg-value-from-args "code"))
-         (path (github-code-search-get-arg-value-from-args "path"))
+         (path (github-code-search-get-arg-value-from-args "filename"))
          (query
           (replace-regexp-in-string "[+]" " "
                                     (github-code-search-format-args-to-query
                                      (seq-remove
                                       (apply-partially
                                        #'string-match-p
-                                       "^--\\(path\\|code\\)=")
+                                       "^--\\(filename\\|code\\)=")
                                       (github-code-search-get-args-for-query)))))
          (type
           (cond ((and path (or (not code)
@@ -1087,9 +1087,10 @@ Argument QUERIES is a list of strings."
           queries))
 
 (defvar github-code-search-code-queries '("language"
-                                          "filename" "path"
+                                          "filename"
                                           "user"
-                                          "extension" "in"))
+                                          "extension"
+                                          "in"))
 
 
 (defun github-code-search-get-args-for-query ()
@@ -1174,9 +1175,9 @@ Argument ARGS is a list of strings, each representing a search argument."
                  (if-let ((ext
                            (when buffer-file-name
                              (file-name-extension buffer-file-name))))
-                     (concat "--path=" "*." ext)
+                     (concat "--filename=" "*." ext)
                    (when (and buffer-file-name (not code-arg))
-                     (concat "--path="
+                     (concat "--filename="
                              (file-name-nondirectory buffer-file-name)))))))))
   [:description github-code-search-query-description
                 :setup-children

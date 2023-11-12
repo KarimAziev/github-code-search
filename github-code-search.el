@@ -44,7 +44,6 @@
 ;; | `e'   | Toggle the exactness of a GitHub code search |
 ;; | `u'   | Toggle showing only unique results           |
 ;; | `+'   | Load next page                               |
-;; | `g'   | Revert buffer                                |
 
 ;; You can edit keybinding by modifiyng `github-code-search-results-mode-map'.
 
@@ -89,6 +88,12 @@ or a symbol indicating where to fetch the OAuth token."
   :type 'integer
   :group 'github-code-sarch)
 
+(defvar github-code-search-spinner-text-elems ["◴" "◷" "◶" "◵"]
+  "List of strings to show in sequence for the spinner.")
+
+(defvar-local github-code-search-spinner-timer nil
+  "Timer to update the spinner display.")
+
 (defvar github-code-search--cached-auth-data nil)
 
 (defvar github-code-search-langs-alist nil)
@@ -102,12 +107,13 @@ or a symbol indicating where to fetch the OAuth token."
 (defvar-local github-code-search-response nil)
 (defvar-local github-code-search-exact nil)
 (defvar-local github-code-search-total-count nil)
+(defvar-local github-code-search-loading nil)
 (defvar-local github-code-search-page 1)
 (defvar-local github-code-search-uniq nil)
 
 
 (defun github-code-search-read-auth-marker ()
-  "Search for gh token in `auth-sources'."
+  "Retrieve and optionally save GitHub auth credentials."
   (when-let ((variants
               (seq-uniq
                (auth-source-search
@@ -204,7 +210,7 @@ The default value is nil."
 
 ;;;###autoload
 (defun github-code-search-change-user ()
-  "Search for gh token in `auth-sources'."
+  "Toggle GitHub code search user authentication."
   (interactive)
   (if github-code-search--cached-auth-data
       (setq github-code-search--cached-auth-data nil)
@@ -343,7 +349,7 @@ represent a JSON false value.  It defaults to `:false'."
       (kill-buffer download-buffer))))
 
 (defun github-code-search-get-browse-query ()
-  "Open results in browser."
+  "Generate GitHub code search URL from arguments."
   (let* ((code (github-code-search-get-arg-value-from-args "code"))
          (path (github-code-search-get-arg-value-from-args "filename"))
          (query
@@ -371,7 +377,7 @@ represent a JSON false value.  It defaults to `:false'."
 
 ;;;###autoload
 (defun github-code-search-browse-gists ()
-  "Open results in browser."
+  "Search GitHub gists online."
   (interactive)
   (funcall github-code-search-word-browse-fn
            (concat "https://gist.github.com/search?"
@@ -379,7 +385,7 @@ represent a JSON false value.  It defaults to `:false'."
 
 ;;;###autoload
 (defun github-code-search-browse ()
-  "Open results in browser."
+  "Search GitHub code via a web browser."
   (interactive)
   (funcall github-code-search-word-browse-fn
            (concat "https://github.com/search?"
@@ -437,6 +443,38 @@ Argument FN is extra function to apply with ARGS."
               (when fn
                 (apply fn args))))))))
 
+(defun github-code-search-get-status-error (status)
+  "Display error details from GitHub code search status.
+
+Argument STATUS is a plist containing the status information, including any
+error details."
+  (when-let ((err (plist-get status :error)))
+    (concat (propertize
+             "github-code-search error: "
+             'face
+             'error)
+            (mapconcat (apply-partially #'format "%s")
+                       (delq nil
+                             (list (or
+                                    (when-let ((type
+                                                (ignore-errors
+                                                  (cadr
+                                                   err))))
+                                      type)
+                                    err)
+                                   (ignore-errors (caddr
+                                                   err))
+                                   (ignore-errors
+                                     (alist-get 'message
+                                                (car-safe
+                                                 (last
+                                                  err))))
+                                   (ignore-errors
+                                     (alist-get 'documentation_url
+                                                (car-safe
+                                                 (last
+                                                  err))))))
+                       " "))))
 (defun github-code-search-async-request (code query page callback)
   "Send an asynchronous request to GitHub's CODE search API.
 
@@ -454,7 +492,23 @@ results are returned, with the search results passed as an argument."
                         "")))
     (ghub-request "GET"
                   (concat "search/code?q=" q
-                          (format "&per_page=100&page=%s" page))
+                          (format "&per_page=%s&page=%s"
+                                  (or
+                                   (when-let* ((buff
+                                                (get-buffer
+                                                 github-code-search-result-buffer-name))
+                                               (total (buffer-local-value
+                                                       'github-code-search-total-count
+                                                       buff))
+                                               (len
+                                                (length (buffer-local-value
+                                                         'github-code-search-response
+                                                         buff))))
+                                     (when (> total len)
+                                       (min (- total len)
+                                            github-code-search-per-page-limit)))
+                                   github-code-search-per-page-limit)
+                                  page))
                   nil
                   :auth (cdr github-code-search--cached-auth-data)
                   :username (car github-code-search--cached-auth-data)
@@ -463,9 +517,13 @@ results are returned, with the search results passed as an argument."
                   :forge 'github
                   :host "api.github.com"
                   :callback
-                  (lambda (value _headers _status _req)
+                  (lambda (value _headers status _req)
                     (let ((buffer (get-buffer
                                    github-code-search-result-buffer-name)))
+                      (when-let ((err
+                                  (github-code-search-get-status-error
+                                   status)))
+                        (message err))
                       (when (and
                              (buffer-live-p
                               buffer)
@@ -478,50 +536,244 @@ results are returned, with the search results passed as an argument."
                                      'github-code-search--search-extra-query
                                      buffer)))
                         (when callback
-                          (funcall callback value))))))))
+                          (ignore-errors (funcall callback value)))))))))
 
 (defun github-code-search-next-page (&rest _)
   "Increment the page number and request the next page of GitHub code search."
   (interactive)
-  (setq github-code-search-page (1+ github-code-search-page))
-  (github-code-search-request github-code-search--search-code
-                              github-code-search--search-extra-query
-                              github-code-search-exact
-                              github-code-search-uniq))
+  (cond ((and
+          (not github-code-search-loading)
+          github-code-search-total-count
+          (> github-code-search-total-count
+             (length github-code-search-response)))
+         (setq github-code-search-page (1+ github-code-search-page)
+               github-code-search-loading t)
+         (github-code-search-request github-code-search--search-code
+                                     github-code-search--search-extra-query
+                                     github-code-search-exact
+                                     github-code-search-uniq))))
+
+(defun github-code-search-get-pagination-button-bounds ()
+  "Locate pagination button text boundaries."
+  (pcase-let ((`(,beg . ,end)
+               (save-excursion
+                 (goto-char (point-min))
+                 (when-let ((prop (text-property-search-forward
+                                   'github-code-search-pagination-button t
+                                   'equal)))
+                   (cons (prop-match-beginning prop)
+                         (prop-match-end prop))))))
+    (when beg
+      (cons beg end))))
 
 (defun github-code-search-delete-footer ()
   "Remove the footer from the GitHub code search results."
-  (save-excursion
-    (when-let ((prop-obj (save-excursion
-                           (goto-char (point-min))
-                           (text-property-search-forward
-                            'github-code-search-pagination-button t
-                            'equal))))
-      (let ((beg (prop-match-beginning prop-obj))
-            (end (prop-match-end prop-obj)))
-        (when (and beg end)
+  (require 'text-property-search)
+  (let ((inhibit-read-only t))
+    (save-excursion
+      (pcase-let ((`(,beg . ,end)
+                   (github-code-search-get-pagination-button-bounds)))
+        (when beg
           (delete-region beg end))))))
+
+
+
+(defun github-code-search-spinner-find-overlay ()
+  "Locate the spinner overlay in a buffer."
+  (seq-find (lambda (o)
+              (and (overlayp o)
+                   (overlay-get o 'github-code-search-spinner-overlay)))
+            (car (overlay-lists))))
+
+(defun github-code-search-spinner-cleanup ()
+  "Remove the spinner overlay."
+  (when-let ((ov (github-code-search-spinner-find-overlay)))
+    (delete-overlay ov)))
+
+(defun github-code-search-spinner-overlay-make (start end &optional buffer front-advance
+                                      rear-advance &rest props)
+  "Create a new overlay with range BEG to END in BUFFER and return it.
+
+If omitted, BUFFER defaults to the current buffer.
+START and END may be integers or markers.
+The fourth arg FRONT-ADVANCE, if non-nil, makes the marker
+for the front of the overlay advance when text is inserted there
+\(which means the text *is not* included in the overlay).
+The fifth arg REAR-ADVANCE, if non-nil, makes the marker
+for the rear of the overlay advance when text is inserted there
+\(which means the text *is* included in the overlay).
+PROPS is a plist to put on overlay."
+  (let ((overlay (make-overlay start end buffer front-advance
+                               rear-advance)))
+    (dotimes (idx (length props))
+      (when (eq (logand idx 1) 0)
+        (let* ((prop-name (nth idx props))
+               (val (plist-get props prop-name)))
+          (overlay-put overlay prop-name val))))
+    overlay))
+
+
+(defun github-code-search-spinner--stop ()
+  "Stop the active spinner timer."
+  (when (timerp github-code-search-spinner-timer)
+    (cancel-timer github-code-search-spinner-timer)
+    (setq github-code-search-spinner-timer nil)))
+
+
+(defun github-code-search-spinner-update (buffer)
+  "Update spinner animation in a specified buffer.
+
+Argument BUFFER is the buffer where the spinner update should occur."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (when-let ((wnd (get-buffer-window buffer)))
+        (with-selected-window wnd
+          (pcase-let* ((`(,beg . ,end)
+                        (github-code-search-get-pagination-button-bounds))
+                       (ov
+                        (or (github-code-search-spinner-find-overlay)
+                            (and end
+                                 (github-code-search-spinner-overlay-make (1-
+                                                                           end)
+                                                                          (1-
+                                                                           end)
+                                                                          (current-buffer)
+                                                                          t
+                                                                          nil
+                                                                          'github-code-search-spinner-overlay
+                                                                          t
+                                                                          'before-string
+                                                                          (aref
+                                                                           github-code-search-spinner-text-elems
+                                                                           0)
+                                                                          'help-echo
+                                                                          "Loading..."))))
+                       (next-idx
+                        (mod (or
+                              (ignore-errors
+                                (+ 1
+                                   (seq-position
+                                    github-code-search-spinner-text-elems
+                                    (replace-regexp-in-string
+                                     (concat "[^" (mapconcat
+                                                   'identity
+                                                   github-code-search-spinner-text-elems
+                                                   "")
+                                             "]")
+                                     ""
+                                     (overlay-get ov 'before-string)))))
+                              0)
+                             (length github-code-search-spinner-text-elems)))
+                       (next-str (aref github-code-search-spinner-text-elems
+                                       next-idx)))
+            (if (and beg end ov)
+                (progn (move-overlay ov (1- end)
+                                     (1- end) buffer)
+                       (overlay-put ov 'before-string next-str))
+              (github-code-search-spinner--stop)
+              (github-code-search-spinner-cleanup))))))))
+
+
+;;;###autoload
+(defun github-code-search-spinner-start ()
+  "Start a repeating timer to update a spinner."
+  (interactive)
+  (github-code-search-spinner--stop)
+  (github-code-search-spinner-cleanup)
+  (setq github-code-search-spinner-timer
+        (run-with-timer 0.2 0.2 'github-code-search-spinner-update (current-buffer))))
+
+;;;###autoload
+(defun github-code-search-spinner-stop ()
+  "Stop the spinner and clean up resources."
+  (interactive)
+  (github-code-search-spinner--stop)
+  (github-code-search-spinner-cleanup))
+
+
+(defun github-code-search-property-boundaries (prop &optional pos)
+  "Return boundaries of property PROP at POS (cdr is 1+)."
+  (unless pos (setq pos (point)))
+  (let (beg end val)
+    (setq val (get-text-property pos prop))
+    (if (null val)
+        val
+      (if (or (bobp)
+              (not (eq (get-text-property (1- pos) prop) val)))
+          (setq beg pos)
+        (setq beg (previous-single-property-change pos prop))
+        (when (null beg)
+          (setq beg (point-min))))
+      (if (or (eobp)
+              (not (eq (get-text-property (1+ pos) prop) val)))
+          (setq end pos)
+        (setq end (next-single-property-change pos prop))
+        (when (null end)
+          (setq end (point-max))))
+      (cons beg end))))
+
+(defun github-code-search-toggle-button-at-point (&optional btn &rest _)
+  "Toggle pagination button and fetch next GitHub code search page.
+
+Optional argument BTN is a marker pointing to the button to toggle. If nil, the
+point is used."
+  (pcase-let
+      ((`(,beg . ,end)
+        (github-code-search-property-boundaries
+         'github-code-search-pagination-button
+         (if btn
+             (marker-position btn)
+           (point))))
+       (inhibit-read-only t))
+    (when (and beg end)
+      (cond ((eq (face-at-point) 'button)
+             (add-face-text-property beg end 'font-lock-comment-face nil)
+             (github-code-search-spinner-start)
+             (github-code-search-next-page))))))
+
+(defun github-code-search-get-button ()
+  "Create a \"Next Page\" button for GitHub code search results."
+  (let* ((next-page
+          (when (and github-code-search-total-count
+                     github-code-search-page
+                     (> github-code-search-total-count
+                        (length github-code-search-response)))
+            (1+ github-code-search-page)))
+         (label (format "[Next page %s]"
+                        (cond (next-page next-page)
+                              (t "None"))))
+         (btn (buttonize label #'github-code-search-toggle-button-at-point))
+         (len (length btn)))
+    (add-text-properties 0 len
+                         '(github-code-search-pagination-button t)
+                         btn)
+    (when (or (not next-page)
+              github-code-search-loading)
+      (add-face-text-property 0 len 'font-lock-comment-face nil
+                              btn))
+    btn))
+
+
 
 (defun github-code-search-render-footer ()
   "Render the footer for the GitHub code search page."
+  (github-code-search-spinner--stop)
+  (github-code-search-spinner-cleanup)
   (github-code-search-delete-footer)
-  (save-excursion
-    (goto-char (point-max))
-    (newline)
-    (insert
-     (if
-         (and github-code-search-total-count
-              (> github-code-search-total-count (length
-                                                 github-code-search-response)))
-         (buttonize
-          (format "[Next page %s]" (1+ github-code-search-page))
-          #'github-code-search-next-page)
-       (buttonize
-        "[Next page]"
-        #'message "No next page")))
-    (add-text-properties (line-beginning-position)
-                         (line-end-position)
-                         '(github-code-search-pagination-button t))))
+  (let ((inhibit-read-only t))
+    (save-excursion
+      (goto-char (point-max))
+      (let ((beg)
+            (end (point)))
+        (while (looking-back "\n\n" 0)
+          (forward-line -1)
+          (setq beg (point)))
+        (when beg
+          (delete-region beg end)))
+      (newline)
+      (insert
+       (github-code-search-get-button)))))
+
 (defun github-code-search-filter-uniq (items)
   "Remove duplicate ITEMS from a list based on specific criteria.
 
@@ -563,10 +815,10 @@ text matches a specific regular expression."
           text)))
      items)))
 
+
 (defun github-code-search-revert (&rest _)
   "Revert the GitHub code search buffer and update it with new search results."
-  (let ((filtered github-code-search-response)
-        (label))
+  (let ((filtered github-code-search-response))
     (when github-code-search-uniq
       (setq filtered (github-code-search-filter-uniq filtered)))
     (when github-code-search-exact
@@ -578,27 +830,7 @@ text matches a specific regular expression."
        filtered
        github-code-search--search-code)
       (github-code-search-render-footer)
-      (setq label (mapconcat #'car
-                             (seq-filter #'cdr
-                                         (list
-                                          (cons "[Uniq]"
-                                                github-code-search-uniq)
-                                          (cons "[Exact]"
-                                                github-code-search-exact)))
-                             " "))
-      (github-code-search--update-header-line
-       (if (string-empty-p (string-trim label))
-           (format (concat " Page %s (%s/%s) ")
-                   github-code-search-page
-                   (length github-code-search-response)
-                   github-code-search-total-count)
-         (format " Page %s (%s/%s) - %s (%s)"
-                 github-code-search-page
-                 (length github-code-search-response)
-                 github-code-search-total-count
-                 label
-                 (length filtered)))
-       'warning)
+      (github-code-search-update-header-line)
       (ignore-errors (goto-char pos)))))
 
 (defun github-code-search-toggle-exact ()
@@ -627,6 +859,7 @@ return only unique matches, removing any duplicates from the results."
   (let ((buffer (get-buffer-create
                  github-code-search-result-buffer-name)))
     (with-current-buffer buffer
+      (setq github-code-search-loading t)
       (when (or (not (equal code github-code-search--search-code))
                 (not (equal query github-code-search--search-extra-query)))
         (let ((inhibit-read-only t))
@@ -638,9 +871,10 @@ return only unique matches, removing any duplicates from the results."
         (setq github-code-search-exact exact)
         (setq github-code-search-uniq uniq)
         (setq github-code-search--search-extra-query query))
-      (unless (symbol-value 'github-code-search-results-mode)
-        (github-code-search-results-mode 1))
-      (github-code-search--update-header-line " Loading..." 'warning)
+      (unless (derived-mode-p 'github-code-search-result-mode)
+        (github-code-search-result-mode))
+      (github-code-search-update-header-line)
+      (github-code-search-spinner-start)
       (setq github-code-search--search-code code)
       (setq github-code-search--search-extra-query query)
       (github-code-search-async-request
@@ -650,7 +884,10 @@ return only unique matches, removing any duplicates from the results."
                 (filtered-items items))
            (when (buffer-live-p buffer)
              (with-current-buffer buffer
+               (setq github-code-search-loading nil)
                (setq github-code-search-exact exact)
+               (when (zerop (length (alist-get 'items value)))
+                 (setq github-code-search-page (max 1 (1- github-code-search-page))))
                (setq github-code-search-uniq uniq)
                (when github-code-search-uniq
                  (setq filtered-items (github-code-search-filter-uniq filtered-items)))
@@ -673,14 +910,10 @@ return only unique matches, removing any duplicates from the results."
                       filtered-items
                       code)))
                  (github-code-search-render-footer)
-                 (github-code-search--update-header-line
-                  (format " Page %s (%s/%s)"
-                          github-code-search-page
-                          (length github-code-search-response)
-                          github-code-search-total-count)
-                  'warning)))
+                 (github-code-search-update-header-line)))
              (unless (get-buffer-window buffer)
-               (pop-to-buffer buffer)))))))))
+               (pop-to-buffer buffer)
+               (select-window (get-buffer-window buffer))))))))))
 
 (defun github-code-search-fontify (code name)
   "Highlight CODE syntax for GitHub CODE search.
@@ -689,14 +922,13 @@ Argument NAME is the name of the file being searched for in the GitHub CODE
 search.
 Argument CODE is the CODE snippet that will be inserted into a temporary buffer
 for fontification."
-  
   (with-temp-buffer
     (insert code)
     (let ((buffer-file-name (expand-file-name name
                                               default-directory)))
       (ignore-errors
-        (set-auto-mode)
-        (font-lock-ensure)))
+        (delay-mode-hooks         (set-auto-mode)
+                                  (font-lock-ensure))))
     (buffer-string)))
 
 (defun github-code-search-download-code (item &optional search-str)
@@ -706,10 +938,10 @@ Argument ITEM is an association list that contains information about a specific
 item from a GitHub code search.
 Argument SEARCH-STR is an optional string that specifies the text to search for
 within the downloaded code."
-  (let* ((data (json-parse-string
+  (let* ((data (github-code-search-json-parse-string
                 (github-code-search-download-url (alist-get 'url item))
-                :object-type 'alist
-                :array-type 'list))
+                'alist
+                'list))
          (github-file (or (alist-get 'name item)
                           (alist-get 'path item)))
          (file (expand-file-name github-file
@@ -779,60 +1011,68 @@ code."
                                                          'github-code-search-str))))
 (defvar-local github-code-search--old-header-line nil)
 
-;;;###autoload
-(define-minor-mode github-code-search-results-mode
-  "Minor mode for interacting for github code search results."
-  :lighter " gh-search-results"
-  :keymap
-  (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "+") #'github-code-search-next-page)
-    (define-key map (kbd "e") #'github-code-search-toggle-exact)
-    (define-key map (kbd ".") #'github-code-search-toggle-exact)
-    (define-key map (kbd "u") #'github-code-search-toggle-uniq)
-    (define-key map (kbd "g") #'revert-buffer)
-    map)
-  :global nil
-  (if (not github-code-search-results-mode)
-      (setq header-line-format github-code-search--old-header-line)
-    (setq-local revert-buffer-function #'github-code-search-revert)
-    (setq github-code-search--old-header-line header-line-format
-          header-line-format
+(defun github-code-search-update-header-line ()
+  "Update header line with GitHub code search info."
+  (when (derived-mode-p 'github-code-search-result-mode)
+    (setq header-line-format
           (list (concat (propertize " " 'display '(space :align-to 0))
-                        (format "%s" (buffer-name)))
+                        (format "%s " (buffer-name)))
+                '(:eval (propertize (format (concat " Page %s (%s/%s) ")
+                                            (or github-code-search-page 1)
+                                            (length github-code-search-response)
+                                            (or github-code-search-total-count 0))
+                                    'face
+                                    'font-lock-number-face))
+                (if github-code-search-loading
+                    (propertize " Loading" 'face 'warning)
+                  (propertize " Ready" 'face 'success))
                 (string-join (delq nil
                                    (list (when github-code-search-uniq
                                            "[Uniq]")
                                          (when github-code-search-exact
                                            "[Exact]")))
                              " ")
-                (propertize "Ready" 'face 'success)
-                '(:eval
-                  (let* ((num-exchanges
-                          (format "[Next page %s]"
-                                  (1+ github-code-search-page)))
-                         (l2 (length num-exchanges)))
-                    (concat
-                     (propertize
-                      " " 'display `(space :align-to ,(max 1 (- (window-width) (+ 2 l2)))))
-                     (propertize
-                      (button-buttonize num-exchanges
-                                        'github-code-search-next-page)
-                      'mouse-face (if (and github-code-search-total-count
-                                           (> github-code-search-total-count
-                                              (length github-code-search-response)))
-                                      'highlight
-                                    'font-lock-comment-face)
-                      'help-echo
-                      "Number of past exchanges to include with each request")
-                     " ")))))))
+                (let* ((btn (github-code-search-get-button))
+                       (l2 (length btn)))
+                  (concat
+                   (propertize
+                    " " 'display `(space :align-to ,(max 1 (- (window-width) (+ 2 l2)))))
+                   btn
+                   " "))))))
 
-(defun github-code-search--update-header-line (msg face)
-  "Update header line with status MSG in FACE."
-  (and (symbol-value 'github-code-search-results-mode)
-       (consp header-line-format)
-       (setf (nth 1 header-line-format)
-             (propertize msg 'face face))
-       (force-mode-line-update)))
+(defvar github-code-search-results-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "+") #'github-code-search-next-page)
+    (define-key map (kbd "e") #'github-code-search-toggle-exact)
+    (define-key map (kbd ".") #'github-code-search-toggle-exact)
+    (define-key map (kbd "u") #'github-code-search-toggle-uniq)
+    (define-key map (kbd "?") #'github-code-search)
+    map))
+
+
+
+(define-derived-mode github-code-search-result-mode special-mode
+  "Github Code Search"
+  "Major mode for interacting with Github code search results.
+
+The following commands are available:
+
+\\<github-code-search-results-mode-map>
+\\{github-code-search-results-mode-map}."
+  (setq-local buffer-undo-list t)
+  (setq-local text-scale-remap-header-line t)
+  (setq github-code-search--old-header-line header-line-format)
+  (when (fboundp 'header-line-indent-mode)
+    (header-line-indent-mode))
+  (github-code-search-update-header-line)
+  (setq-local revert-buffer-function #'github-code-search-revert)
+  (let ((map (copy-keymap github-code-search-results-mode-map)))
+    (set-keymap-parent map (make-composed-keymap button-buffer-map
+                                                 special-mode-map))
+    (use-local-map map)))
+
+(put 'github-code-search-result-mode 'mode-class 'special)
+
 
 
 (defun github-code-search-json-read-buffer (&optional object-type array-type null-object
@@ -1090,7 +1330,8 @@ Argument QUERIES is a list of strings."
                                           "filename"
                                           "user"
                                           "extension"
-                                          "in"))
+                                          "in"
+                                          "org"))
 
 
 (defun github-code-search-get-args-for-query ()

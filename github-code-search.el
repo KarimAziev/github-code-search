@@ -946,7 +946,9 @@ within the downloaded code."
                           (alist-get 'path item)))
          (file (expand-file-name github-file
                                  default-directory))
-         (code (base64-decode-string (alist-get 'content data))))
+         (code (decode-coding-string (base64-decode-string (alist-get 'content
+                                                                      data))
+                                     'utf-8)))
     (github-code-search-popup
      code
      (get-buffer-create (concat "*" github-file

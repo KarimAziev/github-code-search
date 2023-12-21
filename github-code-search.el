@@ -1496,7 +1496,7 @@ return only unique matches, removing any duplicates from the results."
       (unless (derived-mode-p 'github-code-search-result-mode)
         (github-code-search-result-mode))
       (cond ((and (equal code github-code-search--search-code)
-                  (equal query github-code-search--search-code)
+                  (equal query github-code-search--search-extra-query)
                   (or (not (equal github-code-search-uniq uniq))
                       (not (equal github-code-search--search-extra-query exact))))
              (setq github-code-search-exact exact)

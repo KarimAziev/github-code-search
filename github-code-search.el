@@ -1452,7 +1452,8 @@ text matches a specific regular expression."
 
 (defun github-code-search-revert (&rest _)
   "Revert the GitHub code search buffer and update it with new search results."
-  (let ((filtered github-code-search-response))
+  (let ((filtered github-code-search-response)
+        (hidden-count))
     (when github-code-search-uniq
       (setq filtered (github-code-search-filter-uniq filtered)))
     (when github-code-search-exact
@@ -1460,11 +1461,13 @@ text matches a specific regular expression."
     (let ((inhibit-read-only t)
           (pos (point)))
       (erase-buffer)
+      (setq hidden-count (- (length github-code-search-response)
+                            (length filtered)))
       (github-code-search-insert-matches
        filtered
        github-code-search--search-code)
       (github-code-search-render-footer)
-      (github-code-search-update-header-line)
+      (github-code-search-update-header-line hidden-count)
       (ignore-errors (goto-char pos)))))
 
 (defun github-code-search-toggle-exact ()
@@ -1498,7 +1501,8 @@ return only unique matches, removing any duplicates from the results."
       (cond ((and (equal code github-code-search--search-code)
                   (equal query github-code-search--search-extra-query)
                   (or (not (equal github-code-search-uniq uniq))
-                      (not (equal github-code-search--search-extra-query exact))))
+                      (not (equal github-code-search--search-extra-query
+                                  exact))))
              (setq github-code-search-exact exact)
              (setq github-code-search-uniq uniq)
              (github-code-search-revert))
@@ -1523,22 +1527,20 @@ return only unique matches, removing any duplicates from the results."
              (github-code-search-async-request
               code query github-code-search-page
               (lambda (value)
-                (let* ((items (alist-get 'items value))
-                       (filtered-items items))
+                (let ((items (alist-get 'items value)))
                   (when (buffer-live-p buffer)
                     (with-current-buffer buffer
                       (setq github-code-search-loading nil)
                       (setq github-code-search-exact exact)
                       (when (zerop (length (alist-get 'items value)))
-                        (setq github-code-search-page (max 1 (1- github-code-search-page))))
+                        (setq github-code-search-page
+                              (max 1
+                                   (1- github-code-search-page))))
                       (setq github-code-search-uniq uniq)
-                      (when github-code-search-uniq
-                        (setq filtered-items (github-code-search-filter-uniq filtered-items)))
-                      (when github-code-search-exact
-                        (setq filtered-items (github-code-search-filter-exact filtered-items)))
-                      (setq github-code-search-total-count (or
-                                                            (alist-get 'total_count value)
-                                                            github-code-search-total-count))
+                      (setq github-code-search-total-count
+                            (or
+                             (alist-get 'total_count value)
+                             github-code-search-total-count))
                       (setq buffer-read-only t)
                       (let ((inhibit-read-only t))
                         (when items
@@ -1546,14 +1548,7 @@ return only unique matches, removing any duplicates from the results."
                                 (if github-code-search-response
                                     (append github-code-search-response items)
                                   items)))
-                        (when filtered-items
-                          (save-excursion
-                            (goto-char (point-max))
-                            (github-code-search-insert-matches
-                             filtered-items
-                             code)))
-                        (github-code-search-render-footer)
-                        (github-code-search-update-header-line)))
+                        (github-code-search-revert)))
                     (unless (get-buffer-window buffer)
                       (pop-to-buffer buffer)
                       (select-window (get-buffer-window buffer))))))))))))
@@ -1576,8 +1571,11 @@ for fontification."
 
 (defvar-local github-code-search--old-header-line nil)
 
-(defun github-code-search-update-header-line ()
-  "Update header line with GitHub code search info."
+(defun github-code-search-update-header-line (&optional hidden-count)
+  "Update header line with GitHub code search info.
+
+Optional argument HIDDEN-COUNT is an integer representing the number of search
+results that are not displayed."
   (when (derived-mode-p 'github-code-search-result-mode)
     (setq header-line-format
           (list (concat (propertize " " 'display '(space :align-to 0))
@@ -1592,10 +1590,14 @@ for fontification."
                     (propertize " Loading" 'face 'warning)
                   (propertize " Ready" 'face 'success))
                 (string-join (delq nil
-                                   (list (when github-code-search-uniq
-                                           " [Uniq] ")
-                                         (when github-code-search-exact
-                                           " [Exact] ")))
+                                   (list
+                                    (when github-code-search-uniq
+                                      (propertize " [Uniq] " 'face 'warning))
+                                    (when github-code-search-exact
+                                      (propertize " [Exact] " 'face 'warning))
+                                    (when (and hidden-count
+                                               (> hidden-count 0))
+                                      (format " %s results hidden" hidden-count))))
                              " ")
                 (let* ((btn (github-code-search-get-button))
                        (l2 (length btn)))
@@ -1856,6 +1858,33 @@ When you omit this qualifier, only the file contents are searched."
   :argument-regexp "\\(?:file\\(?:,path\\)?\\|path\\)"
   :choices '("file" "path" "file,path"))
 
+
+(defun github-code-search-make-toggled-description (var &optional description
+                                                        align)
+  "Toggle display of a variable's state with optional description.
+
+Argument VAR is the variable to toggle.
+
+Optional argument DESCRIPTION is the string to display; defaults to the string
+representation of VAR.
+
+Optional argument ALIGN is the column to align the toggle indicator; defaults to
+32."
+  (lambda ()
+    (concat
+     (propertize
+      (or description (format "%s" var))
+      'face
+      (if
+          (and (boundp var)
+               (symbol-value var))
+          'success nil))
+     (propertize " " 'display
+                 (list 'space :align-to (or align 32)))
+     (if (and (boundp var)
+              (symbol-value var))
+         "[X]" "[ ]"))))
+
 ;;;###autoload (autoload 'github-code-search "github-code-search" nil t)
 (transient-define-prefix github-code-search ()
   "A menu for GitHub code search with specific options."
@@ -1885,27 +1914,43 @@ When you omit this qualifier, only the file contents are searched."
               (github-code-search-queries-to-options
                github-code-search-code-queries))))]
   ["Filtering"
-   ("x" "Exact matches" "--exact")
-   ("D" "Delete dublicates" "--uniq")]
+   ("x" "Exact matches" "--exact" :if-not-derived github-code-search-result-mode)
+   ("D" "Delete dublicates" "--uniq" :if-not-derived github-code-search-result-mode)
+   ("x" github-code-search-toggle-exact
+    :description ,(github-code-search-make-toggled-description
+                   'github-code-search-exact
+                   "Exact matches ")
+    :if-derived
+    github-code-search-result-mode
+    :transient t)
+   ("D" github-code-search-toggle-uniq
+    :description
+    ,(github-code-search-make-toggled-description
+      'github-code-search-uniq
+      "Delete dublicates")
+    :if-derived
+    github-code-search-result-mode
+    :transient t)]
   ["Config"
    ("*" github-code-search-change-user
-    :description (lambda ()
-                   (concat  "Github User: "
-                            (if
-                                (or (not (car-safe
-                                          github-code-search--cached-auth-data))
-                                    (string-empty-p
-                                     (car
-                                      github-code-search--cached-auth-data))
-                                    (not (cdr-safe
-                                          github-code-search--cached-auth-data)))
-                                "(not logged)"
-                              (propertize
-                               (substring-no-properties
-                                (or (car-safe
-                                     github-code-search--cached-auth-data)
-                                    ""))
-                               'face 'transient-value)))))]
+    :description  (lambda ()
+                    (concat  "Github User: "
+                             (if
+                                 (or
+                                  (not (car-safe
+                                        github-code-search--cached-auth-data))
+                                  (string-empty-p
+                                   (car
+                                    github-code-search--cached-auth-data))
+                                  (not (cdr-safe
+                                        github-code-search--cached-auth-data)))
+                                 "(not logged)"
+                               (propertize
+                                (substring-no-properties
+                                 (or (car-safe
+                                      github-code-search--cached-auth-data)
+                                     ""))
+                                'face 'transient-value)))))]
   ["Actions"
    ("g g" "Browse" github-code-search-browse)
    ("g i" "Browse Gists" github-code-search-browse-gists)

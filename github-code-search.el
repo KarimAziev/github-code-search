@@ -644,9 +644,16 @@ retrieved file content."
                                 (when search-str
                                   (github-code-search-higlight-matches
                                    search-str)
-                                  (re-search-forward (regexp-quote
-                                                      search-str)
-                                                     nil t 1))))))))))))
+                                  (unless (get-buffer-window buff)
+                                    (pop-to-buffer-same-window buff))
+                                  (let ((wnd (get-buffer-window buff)))
+                                    (with-selected-window wnd
+                                      (when-let ((found (re-search-forward
+                                                         (regexp-quote
+                                                          search-str)
+                                                         nil t 1)))
+                                        (set-window-point wnd found)
+                                        found))))))))))))))
 
 (defun github-code-search-download-code (item &optional search-str)
   "Download and display GitHub code based on search results.
@@ -702,11 +709,13 @@ If other window doesn't exists, split selected window right."
 (defun github-code-search-load-code-result-at-point ()
   "Download and display full file for the code result at the current point."
   (interactive)
-  (let ((item (get-text-property (point) 'github-code-search-item)))
+  (let ((item (get-text-property (point) 'github-code-search-item))
+        (str
+         (get-text-property (point)
+                            'github-code-search-str)))
     (github-code-search-window-with-other-window
      (github-code-search-download-code item
-                                       (get-text-property (point)
-                                                          'github-code-search-str)))))
+                                       str))))
 
 ;;;###autoload
 (define-minor-mode github-code-search-file-mode

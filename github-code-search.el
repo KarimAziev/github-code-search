@@ -1435,7 +1435,8 @@ remove duplicates."
 Argument ITEMS is a sequence of items that will be filtered based on whether the
 text matches a specific regular expression."
   (let ((re (regexp-opt
-             (list github-code-search--search-code) 'symbols)))
+             (list github-code-search--search-code) 'symbols))
+        (case-fold-search nil))
     (seq-filter
      (lambda (item)
        (let ((text (mapconcat (apply-partially
@@ -1890,11 +1891,8 @@ Optional argument ALIGN is the column to align the toggle indicator; defaults to
   "A menu for GitHub code search with specific options."
   :incompatible (github-code-search-make-incompatible-queries
                  github-code-search-code-queries)
-  :init-value (lambda (ob)
-                (and github-code-search-initial-value
-                     (setf
-                      (slot-value ob 'value)
-                      github-code-search-initial-value)))
+  :value (lambda ()
+           github-code-search-initial-value)
   [:description github-code-search-query-description
    :setup-children
    (lambda (&rest _argsn)
@@ -1909,13 +1907,30 @@ Optional argument ALIGN is the column to align the toggle indicator; defaults to
                                                     (thing-at-point 'symbol t)
                                                     initial-input)
                                             history))
-                     :always-read t)
+                     :always-read t
+                     :init-value (lambda (obj)
+                                   (when-let ((value
+                                               (cond ((and (region-active-p)
+                                                           (use-region-p))
+                                                      (string-trim
+                                                       (buffer-substring-no-properties
+                                                        (region-beginning)
+                                                        (region-end))))
+                                                     ((oref obj value)
+                                                      (oref obj value))
+                                                     (t
+                                                      (when-let
+                                                          ((symb
+                                                            (symbol-at-point)))
+                                                        (symbol-name symb))))))
+                                     (oset obj value value))))
                (list "i" "in" 'github-code-search-in-argument))
               (github-code-search-queries-to-options
                github-code-search-code-queries))))]
   ["Filtering"
    ("x" "Exact matches" "--exact" :if-not-derived github-code-search-result-mode)
-   ("D" "Delete dublicates" "--uniq" :if-not-derived github-code-search-result-mode)
+   ("D" "Delete dublicates" "--uniq" :if-not-derived
+    github-code-search-result-mode)
    ("x" github-code-search-toggle-exact
     :description ,(github-code-search-make-toggled-description
                    'github-code-search-exact

@@ -2,9 +2,16 @@
 
 * About
 
-Search code on GitHub within Emacs.
+This Emacs package provides an interface for executing code searches on GitHub using Emacs' transient interface.
 
-[[./github-code-search-demo.gif]]
+*Features*:
+- Search GitHub repositories and gists by code, language, filename, user, or organization.
+- Open files and jump to code results in Emacs.
+- Highlight relevant search terms and toggle the completeness of matches.
+- Transient menu to quickly configure different GitHub queries.
+- Clone and explore repositories from within Emacs (requires [[https://github.com/KarimAziev/gh-repo][gh-repo]]).
+
+[[./github-code-search.gif]]
 
 * Table of Contents                                       :TOC_2_gh:QUOTE:
 #+BEGIN_QUOTE
@@ -15,17 +22,16 @@ Search code on GitHub within Emacs.
   - [[#manual-installation][Manual installation]]
 - [[#setup][Setup]]
 - [[#usage][Usage]]
-  - [[#customization][Customization]]
 #+END_QUOTE
 
 * Requirements
 
-| Name                                                            | Version |
-|-----------------------------------------------------------------+---------|
-| Emacs                                                           |    28.1 |
-| ~transient~                                                     |   0.4.1 |
-| ~ghub~                                                          |   3.6.0 |
-| ~[[https://github.com/KarimAziev/gh-repo][gh-repo]]~ (optional) |   1.1.0 |
+| Name               | Version |
+|--------------------+---------|
+| Emacs              |    28.1 |
+| ~transient~        |   0.4.1 |
+| ~ghub~             |   3.6.0 |
+| [[https://github.com/KarimAziev/gh-repo][gh-repo]] (optional) |   1.1.0 |
 
 
 * Installation
@@ -89,9 +95,9 @@ To employ this method, set =github-code-search-token= to the symbol =github-code
 
 Next, add an entry to your =auth-sources=:
 
-#+begin_src plaintext
+#+begin_example
 machine api.github.com login YOUR-GITHUB-USERNAME^github-code-search password YOUR-GITHUB-TOKEN
-#+end_src
+#+end_example
 
 You can add this entry to your =~/.authinfo.gpg= file (recommended for secure, encrypted storage) or =~/.authinfo= (see variable =auth-sources=).
 
@@ -116,27 +122,13 @@ If you logged in =gh= cli and want to reuse the user and oauth token you can use
 
 * Usage
 
-To run the GitHub code search in Emacs, use the command =M-x github-code-search=. This will open a menu for GitHub code search where you can enter a specific code query.
+To run the GitHub code search in Emacs, use the command =M-x github-code-search=. This will open a menu for the GitHub code search, where you can enter a specific code query.
 
-After entering the search term, you can either press =RET= to load and display the results in Emacs Mode, or press =C-c C-o= to open the results in the browser.
+[[./github-code-search.png]]
 
-While displaying the results in Emacs, you can use the following commands:
+After entering the search term, you can either press =RET= to load and display the results in Emacs, or press =C-c C-o= to open the results in a browser.
 
-| Key   | Command                                              |
-|-------+------------------------------------------------------|
-| =RET= | Show full code result                                |
-| =.=   | Toggle the exactness of a GitHub code search         |
-| =e=   | Toggle the exactness of a GitHub code search         |
-| =u=   | Toggle the uniqueness of GitHub code search results  |
-| =+=   | Load next page                                       |
-| =g=   | Revert buffer                                        |
+In search buffers, you can also run =M-x github-code-search-file-result-menu= (by default, it is bound to =?= and =C-h ?=) to open a menu with all available actions.
 
-You can edit keybinding by modifiyng ~github-code-search-results-mode-map~.
-
-** Customization
-
-- =github-code-search-word-browse-fn=: Function to browse the results of a code search.
-- =github-code-search-user=: GitHub username for authentication.
-- =github-code-search-token=: GitHub access token or authentication source.
-- =github-code-search-per-page-limit=: Number of results displayed per page.
+[[./github-code-search-result-menu.png]]
 

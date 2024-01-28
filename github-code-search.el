@@ -765,7 +765,7 @@ Argument REPO is the name of the repository to view files from."
                     ""))
    [("f" "Find file" github-code-search-find-other-file
      :inapt-if-not github-code-search-current-buffer-repo)
-    ("d" "View files" github-code-search-view-repo-files
+    ("v" "View files" github-code-search-view-repo-files
      :inapt-if-not github-code-search-current-buffer-repo)
     ("c" "Clone"  github-code-search-clone-repo
      :inapt-if-not github-code-search-current-buffer-repo)
@@ -795,6 +795,7 @@ Argument REPO is the name of the repository to view files from."
     (define-key map (kbd "C-c C-l") #'github-code-search-clone-repo)
     (define-key map (kbd "C-c C-d") #'github-code-search-view-repo-files)
     (define-key map (kbd "?") #'github-code-search-file-result-menu)
+    (define-key map (kbd "f") #'github-code-search-view-repo-files)
     (define-key map (kbd "q") #'quit-window)
     (define-key map (kbd "C-h ?") #'github-code-search-file-result-menu)
     map))
@@ -804,6 +805,8 @@ Argument REPO is the name of the repository to view files from."
     (define-key map (kbd "RET")
                 #'github-code-search-load-code-result-at-point)
     (define-key map (kbd "?") #'github-code-search-file-result-menu)
+    (define-key map (kbd "f") #'github-code-search-find-other-file)
+    (define-key map (kbd "C-c C-f") #'github-code-search-find-other-file)
     (define-key map (kbd "C-h ?") #'github-code-search-file-result-menu)
     (define-key map (kbd "C-c C-o")
                 #'github-code-search-load-code-result-at-point)
@@ -1632,6 +1635,7 @@ results that are not displayed."
     (define-key map (kbd "e") #'github-code-search-toggle-exact)
     (define-key map (kbd ".") #'github-code-search-toggle-exact)
     (define-key map (kbd "u") #'github-code-search-toggle-uniq)
+    (define-key map (kbd "v") #'github-code-search-view-repo-files)
     (define-key map (kbd "?") #'github-code-search-file-result-menu)
     map))
 

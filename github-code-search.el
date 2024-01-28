@@ -6,7 +6,7 @@
 ;; URL: https://github.com/KarimAziev/github-code-search
 ;; Keywords: tools
 ;; Version: 0.2.0
-;; Package-Requires: ((emacs "29.1") (transient "0.4.3") (ghub "3.6.0"))
+;; Package-Requires: ((emacs "29.1") (transient "0.5.3") (ghub "3.6.0"))
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;; This file is NOT part of GNU Emacs.
@@ -44,6 +44,7 @@
 ;; | `e'   | Toggle the exactness of a GitHub code search |
 ;; | `u'   | Toggle showing only unique results           |
 ;; | `+'   | Load next page                               |
+;; | `?'   | Show transient menu with actions             |
 
 ;; You can edit keybinding by modifiyng `github-code-search-results-mode-map'.
 
@@ -54,9 +55,6 @@
 (require 'ghub)
 
 (declare-function json-read-from-string "json")
-
-(eval-and-compile)
-
 (declare-function json-read "json")
 (declare-function auth-source-forget "auth-source")
 (declare-function auth-info-password "auth-source")
@@ -96,15 +94,71 @@ will use the information provided by this variable."
           (function :tag "Custom Function"))
   :group 'github-code-search)
 
-(defcustom github-code-search-code-queries '("language"
-                                             "filename"
-                                             "user"
-                                             "extension"
-                                             "path"
-                                             "org")
-  "Code search queries."
+(defcustom github-code-search-code-queries '(""
+                                             "By language"
+                                             ("language"
+                                              :choices
+                                              github-code-search-languages-choices
+                                              :always-read t
+                                              :class transient-option)
+                                             ""
+                                             "By file or directory"
+                                             ("filename"
+                                              :class transient-option)
+                                             ("extension"
+                                              :class transient-option)
+                                             ("path"
+                                              :class transient-option)
+                                             ""
+                                             "By owner"
+                                             ("org"
+                                              :incompatible ("user")
+                                              :class transient-option)
+                                             ("user"
+                                              :incompatible ("org")
+                                              :class transient-option))
+  "List of query options for GitHub code search.
+
+A list of query specifications for GitHub code search. Each element can be
+either a string representing a separator or a cons cell where the car is a
+string representing a GitHub query and the cdr is a property list of transient
+properties.
+
+The property list can contain transient options such as :choices, :always-read,
+:class, and :incompatible, which define the behavior of the corresponding
+transient command.
+
+The default value is a list of predefined queries and separators that facilitate
+searching by language, file or directory, and owner (organization or user).
+
+Each query specification should be structured as follows:
+
+- A string for a separator, which is used to visually separate groups of related
+options in the transient interface.
+
+- A cons cell where the car is a string representing the GitHub query parameter
+\\=(e.g., \"language\", \"filename\", \"extension\", \"path\", \"org\",
+\"user\") and the cdr is a property list with transient properties that
+customize the behavior of the option.
+
+Addionally the transient properties may include:
+
+- :incompatible, which lists other options that are incompatible with the
+current one.
+
+This customization is part of the `github-code-search' group and should be
+edited using the customization interface or by setting the variable directly in
+Emacs Lisp code."
   :group 'github-code-search
-  :type '(repeat (string :tag "Argument")))
+  :type '(repeat
+          (choice
+           (cons
+            (string :tag "Github Query")
+            (plist
+             :tag "Transient properties"
+             :key-type symbol
+             :value-type sexp))
+           (string :tag "Separator"))))
 
 (defcustom github-code-search-word-browse-fn 'browse-url
   "Function to call for browsing GitHub code search results.
@@ -142,7 +196,7 @@ no effect."
 (defvar github-code-search-paths-hash (make-hash-table :test 'equal)
   "Hash table mapping code search paths to their results.")
 
-(defun github-code-search-paths--put (repo paths)
+(defun github-code-search--paths-put (repo paths)
   "Store PATHS in a hash table with REPO as the key.
 
 Argument REPO is the repository identifier for which PATHS are being stored.
@@ -150,12 +204,16 @@ Argument REPO is the repository identifier for which PATHS are being stored.
 Argument PATHS is a list of directory paths associated with the REPO."
   (puthash repo paths github-code-search-paths-hash))
 
-(defun github-code-search-paths--get (repo)
+(defun github-code-search--paths-get (repo)
   "Retrieve stored paths for a given REPO.
 
 Argument REPO is the repository name for which to retrieve the code search
 paths."
   (gethash repo github-code-search-paths-hash))
+
+(defun github-code-search-current-buffer-repo ()
+  "Search GitHub code in the current buffer's repository."
+  (car (github-code-search-tree--current-repo-path)))
 
 (defvar github-code-search-spinner-text-elems ["◴" "◷" "◶" "◵"]
   "Array of spinner animation characters for code search display.")
@@ -189,56 +247,12 @@ paths."
 (defvar-local github-code-search-page 1)
 (defvar-local github-code-search-uniq nil)
 
-(defun github-code-search-set-major-mode (filename)
-  "Set buffer's major mode based on FILENAME and ensure font-lock.
-
-Argument FILENAME is a string representing the name of the file for which to set
-the major mode."
-  (let ((buffer-file-name (or
-                           (if (file-name-absolute-p filename)
-                               filename
-                             (expand-file-name filename default-directory)))))
-    (ignore-errors
-      (set-auto-mode)
-      (font-lock-ensure))))
-
-(defun github-code-search-fetch-git-tree (repo &optional callback)
-  "Fetch repository's file structure from GitHub API.
-
-Argument REPO is a string representing the GitHub repository in the format
-\"owner/repo\".
-
-Optional argument CALLBACK is a function to be called with the result of the git
-tree fetch."
-  (url-retrieve
-   (format "https://api.github.com/repos/%s/git/trees/HEAD:?recursive=1" repo)
-   (lambda (arg)
-     (if-let ((err (github-code-search-get-status-error arg)))
-         (minibuffer-message err)
-       (with-current-buffer (current-buffer)
-         (goto-char (point-min))
-         (re-search-forward "^$")
-         (delete-region (+ 1 (point))
-                        (point-min))
-         (goto-char (point-min))
-         (let* ((tree (cdr (assq 'tree (github-code-search-json-read-buffer
-                                        'alist
-                                        'list))))
-                (value (github-code-search-paths--put
-                        repo
-                        (seq-filter
-                         (lambda (x)
-                           (when (equal
-                                  (cdr
-                                   (assq
-                                    'type
-                                    x))
-                                  "blob")
-                             (cdr (assoc 'path x))))
-                         tree))))
-           (if callback
-               (funcall callback value)
-             tree)))))))
+(defmacro github-code-search-window-with-other-window (&rest body)
+  "Execute BODY in other window.
+If other window doesn't exists, split selected window right."
+  `(with-selected-window
+       (github-code-search--get-other-wind)
+     (progn ,@body)))
 
 (defun github-code-search-minibuffer-get-metadata ()
   "Retrieve metadata for minibuffer completion."
@@ -321,16 +335,6 @@ tree fetch."
            (setq target result)))
        (and target (minibufferp))))
     target))
-
-(defun github-code-search-minibuffer-exit-with-action (action)
-  "Execute ACTION with current candidate after exiting minibuffer.
-
-Argument ACTION is a function to be called with the current candidate as its
-argument."
-  (pcase-let ((`(,_category . ,current)
-               (github-code-search-minibuffer-get-current-candidate)))
-    (progn (run-with-timer 0.1 nil action current)
-           (abort-minibuffers))))
 
 (defun github-code-search-minibuffer-web-restore-completions-wind ()
   "Resize *Completions* window after next completion."
@@ -420,7 +424,7 @@ inherits the current input method."
 Argument PATH is a string representing the path within the repository to
 preview."
   (let* ((repo (github-code-search-current-buffer-repo))
-         (tree (github-code-search-paths--get repo))
+         (tree (github-code-search--paths-get repo))
          (url (cdr (assq 'url (seq-find (lambda (it)
                                           (equal path (cdr (assq 'path it))))
                                         tree)))))
@@ -531,9 +535,9 @@ Argument REPO is a string representing the name of the GitHub repository."
                           repo
                           path
                           url)))))
-    (if (github-code-search-paths--get repo)
-        (funcall complete-fn (github-code-search-paths--get repo))
-      (github-code-search-fetch-git-tree
+    (if (github-code-search--paths-get repo)
+        (funcall complete-fn (github-code-search--paths-get repo))
+      (github-code-search-tree--fetch-repo-tree
        repo
        complete-fn))))
 
@@ -542,24 +546,59 @@ Argument REPO is a string representing the name of the GitHub repository."
 
 Argument REPO is the repository to be cloned."
   (interactive (list (github-code-search-current-buffer-repo)))
-  (when (progn
-          (require 'gh-repo nil t)
-          (fboundp 'gh-repo-clone-repo))
-    (gh-repo-clone-repo repo)))
+  (github-code-search--gh-repo-action 'gh-repo-clone-repo repo))
 
-(defun github-code-search-current-buffer-repo ()
-  "Search GitHub code in the current buffer's repository."
-  (let* ((name (buffer-name))
-         (segments
-          (split-string (if (string-prefix-p
-                             github-code-search-file-buffer-name-prefix
-                             name)
-                            (substring-no-properties
-                             name
-                             (length github-code-search-file-buffer-name-prefix))
-                          name)
-                        "/" t)))
-    (string-join (seq-take segments 2) "/")))
+;;;###autoload
+(defun github-code-search-browse-repo (repo)
+  "Open the current buffer's GitHub repository in a web browser.
+
+Argument REPO is a string representing the GitHub repository to browse."
+  (interactive (list (github-code-search-current-buffer-repo)))
+  (browse-url (concat "https://github.com/" repo)))
+
+(defun github-code-search-tree--current-repo-path ()
+  "Return cons with repository name and file path."
+  (cond ((derived-mode-p 'github-code-search-result-mode)
+         (let ((prop (or
+                      (when-let* ((val (get-text-property
+                                        (point)
+                                        'github-code-search-item))
+                                  (item (alist-get 'repository
+                                                   val)))
+                        (string-join (delq nil
+                                           (list (alist-get 'full_name
+                                                            item)
+                                                 (alist-get 'path
+                                                            val)))
+                                     "/"))
+                      (get-text-property (point) 'button-data))))
+           (when (stringp prop)
+             (let* ((segments
+                     (split-string (if (string-prefix-p
+                                        "https://" prop)
+                                       (url-filename
+                                        (url-generic-parse-url
+                                         prop))
+                                     prop)
+                                   "/" t))
+                    (repo (string-join (seq-take segments 2) "/"))
+                    (path (string-join (seq-drop segments 2) "/")))
+               (cons repo path)))))
+        (t
+         (let* ((buff-name (buffer-name))
+                (segments
+                 (split-string (if (string-prefix-p
+                                    github-code-search-file-buffer-name-prefix
+                                    buff-name)
+                                   (substring-no-properties
+                                    buff-name
+                                    (length
+                                     github-code-search-file-buffer-name-prefix))
+                                 buff-name)
+                               "/" t))
+                (repo (string-join (seq-take segments 2) "/"))
+                (path (string-join (seq-drop segments 2) "/")))
+           (cons repo path)))))
 
 (defun github-code-search-download-repo-path (repo-name path url &optional
                                                         search-str)
@@ -590,7 +629,7 @@ retrieved file content."
                     (lambda (status &rest _)
                       (let ((buff (get-buffer buff-name)))
                         (if-let ((err
-                                  (github-code-search-get-status-error
+                                  (github-code-search--get-status-error
                                    status)))
                             (progn
                               (message err)
@@ -629,7 +668,7 @@ retrieved file content."
                                           (length
                                            github-code-search-file-buffer-name-prefix))
                                          default-directory))
-                                  (github-code-search-set-major-mode
+                                  (github-code-search--set-major-mode
                                    buffer-file-name))
                                 (setq-local header-line-format
                                             (list " " 'header-line-indent
@@ -686,26 +725,6 @@ code."
                                     (match-end 0)
                                     'highlight))))))
 
-(defmacro github-code-search-window-with-other-window (&rest body)
-  "Execute BODY in other window.
-If other window doesn't exists, split selected window right."
-  `(with-selected-window
-       (let ((wind-target
-              (if (minibuffer-window-active-p (selected-window))
-                  (with-minibuffer-selected-window
-                    (let ((wind (selected-window)))
-                     (or
-                      (window-right wind)
-                      (window-left wind)
-                      (progn (split-window-sensibly) wind))))
-                (let ((wind (selected-window)))
-                 (or
-                  (window-right wind)
-                  (window-left wind)
-                  (progn (split-window-sensibly) wind))))))
-        wind-target)
-     (progn ,@body)))
-
 (defun github-code-search-load-code-result-at-point ()
   "Download and display full file for the code result at the current point."
   (interactive)
@@ -717,6 +736,55 @@ If other window doesn't exists, split selected window right."
      (github-code-search-download-code item
                                        str))))
 
+(defun github-code-search--gh-repo-action (fn &rest args)
+  "Execute FN with ARGS if gh-repo is available, else prompt to install.
+
+Argument FN is a function to be called that is expected to be part of the
+`gh-repo' package.
+
+Remaining arguments ARGS are passed to the function FN when it is called."
+  (if (progn
+        (require 'gh-repo nil t)
+        (fboundp fn))
+      (apply fn args)
+    (message
+     "Install gh-repo from https://github.com/KarimAziev/gh-repo to use this action")))
+
+(defun github-code-search-view-repo-files (repo)
+  "Display repository files using `gh-repo-tree'.
+
+Argument REPO is the name of the repository to view files from."
+  (interactive (list (github-code-search-current-buffer-repo)))
+  (github-code-search--gh-repo-action 'gh-repo-tree repo))
+
+(transient-define-prefix github-code-search-file-result-menu ()
+  "Menu with a list of github code search results commands."
+  [:description (lambda ()
+                  (if-let ((repo (github-code-search-current-buffer-repo)))
+                      (format "Actions for repository %s" repo)
+                    ""))
+   [("f" "Find file" github-code-search-find-other-file
+     :inapt-if-not github-code-search-current-buffer-repo)
+    ("d" "View files" github-code-search-view-repo-files
+     :inapt-if-not github-code-search-current-buffer-repo)
+    ("c" "Clone"  github-code-search-clone-repo
+     :inapt-if-not github-code-search-current-buffer-repo)
+    ("r"
+     github-code-search-browse-repo
+     :description
+     (lambda ()
+       (concat "Browse "
+               (if-let ((repo (github-code-search-current-buffer-repo)))
+                   (concat "https://github.com/" repo)
+                 "")))
+     :inapt-if-not
+     github-code-search-current-buffer-repo)]]
+  [:if-derived github-code-search-result-mode
+   [("+" "Load next page" github-code-search-next-page)
+    ("e" "Toggle exact matches" github-code-search-toggle-exact)
+    ("u" "Load next page" github-code-search-toggle-uniq)
+    ("RET" "View this file" github-code-search-load-code-result-at-point)]])
+
 ;;;###autoload
 (define-minor-mode github-code-search-file-mode
   "Minor mode for displaying remote github files."
@@ -725,12 +793,18 @@ If other window doesn't exists, split selected window right."
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "C-c C-f") #'github-code-search-find-other-file)
     (define-key map (kbd "C-c C-l") #'github-code-search-clone-repo)
+    (define-key map (kbd "C-c C-d") #'github-code-search-view-repo-files)
+    (define-key map (kbd "?") #'github-code-search-file-result-menu)
+    (define-key map (kbd "q") #'quit-window)
+    (define-key map (kbd "C-h ?") #'github-code-search-file-result-menu)
     map))
 
 (defvar github-code-search-src-keymap
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "RET")
                 #'github-code-search-load-code-result-at-point)
+    (define-key map (kbd "?") #'github-code-search-file-result-menu)
+    (define-key map (kbd "C-h ?") #'github-code-search-file-result-menu)
     (define-key map (kbd "C-c C-o")
                 #'github-code-search-load-code-result-at-point)
     (define-key map (kbd "C-<return>")
@@ -1058,65 +1132,6 @@ represent a JSON false value.  It defaults to `:false'."
                                 1))))))
     (and token (cons username token))))
 
-(defun github-code-search-popup (content &optional buffer fn &rest args)
-  "Display GitHub code search CONTENT in a popup window.
-
-Argument BUFFER is an optional argument that specifies the buffer in which the
-code search results will be displayed.
-If not provided, a new buffer named \"`*github-code-search*'\" will be created.
-Argument FN is extra function to apply with ARGS."
-  (with-current-buffer (or (and buffer
-                                (get-buffer-create buffer))
-                           (get-buffer-create
-                            github-code-search-result-buffer-name))
-    (with-current-buffer-window
-        buffer
-        (cons (or 'display-buffer-in-direction)
-              '((window-height . window-preserve-size)))
-        (lambda (window _value)
-          (with-selected-window window
-            (setq buffer-read-only t)
-            (erase-buffer)
-            (let ((inhibit-read-only t))
-              (when content
-                (save-excursion
-                  (insert content)))
-              (when fn
-                (apply fn args))))))))
-
-(defun github-code-search-get-status-error (status)
-  "Display error details from GitHub code search status.
-
-Argument STATUS is a plist containing the status information, including any
-error details."
-  (when-let ((err (plist-get status :error)))
-    (concat (propertize
-             "github-code-search error: "
-             'face
-             'error)
-            (mapconcat (apply-partially #'format "%s")
-                       (delq nil
-                             (list (or
-                                    (when-let ((type
-                                                (ignore-errors
-                                                  (cadr
-                                                   err))))
-                                      type)
-                                    err)
-                                   (ignore-errors (caddr
-                                                   err))
-                                   (ignore-errors
-                                     (alist-get 'message
-                                                (car-safe
-                                                 (last
-                                                  err))))
-                                   (ignore-errors
-                                     (alist-get 'documentation_url
-                                                (car-safe
-                                                 (last
-                                                  err))))))
-                       " "))))
-
 (defun github-code-search-async-request (code query page callback)
   "Send an asynchronous request to GitHub's CODE search API.
 
@@ -1163,7 +1178,7 @@ results are returned, with the search results passed as an argument."
                     (let ((buffer (get-buffer
                                    github-code-search-result-buffer-name)))
                       (when-let ((err
-                                  (github-code-search-get-status-error
+                                  (github-code-search--get-status-error
                                    status)))
                         (message err))
                       (when (and
@@ -1506,7 +1521,10 @@ return only unique matches, removing any duplicates from the results."
                                   exact))))
              (setq github-code-search-exact exact)
              (setq github-code-search-uniq uniq)
-             (github-code-search-revert))
+             (github-code-search-revert)
+             (unless (get-buffer-window buffer)
+               (pop-to-buffer buffer)
+               (select-window (get-buffer-window buffer))))
             (t
              (setq github-code-search-loading t)
              (when (or (not (equal code github-code-search--search-code))
@@ -1614,7 +1632,7 @@ results that are not displayed."
     (define-key map (kbd "e") #'github-code-search-toggle-exact)
     (define-key map (kbd ".") #'github-code-search-toggle-exact)
     (define-key map (kbd "u") #'github-code-search-toggle-uniq)
-    (define-key map (kbd "?") #'github-code-search)
+    (define-key map (kbd "?") #'github-code-search-file-result-menu)
     map))
 
 (define-derived-mode github-code-search-result-mode special-mode
@@ -1707,6 +1725,12 @@ search."
                                      (fboundp 'gh-repo-clone-repo))
                                (buttonize "Clone repo "
                                           #'gh-repo-clone-repo
+                                          repo-name))
+                             (when (progn
+                                     (require 'gh-repo nil t)
+                                     (fboundp 'gh-repo-tree))
+                               (buttonize "View repo "
+                                          #'gh-repo-tree
                                           repo-name))))))
     (let ((inhibit-read-only t))
       (insert (if (bobp)
@@ -1759,36 +1783,52 @@ candidates."
   "Convert GitHub code search QUERIES into command line options.
 
 Argument QUERIES is a list."
-  (let* ((props-alist
-          '(("language"
-             :choices github-code-search-languages-choices
-             :class transient-option)
-            ("code"
-             :class transient-option
-             :always-read t)))
-         (items (mapcan
-                 (lambda (v)
-                   (let ((k (substring-no-properties v 0 1)))
-                     (list (append (list (format "%s" k) v (format
-                                                            "--%s=" v))
-                                   (cdr (assoc-string v
-                                                      props-alist)))
-                           (append (list (format "%s" (upcase k))
-                                         (format "not %s" v)
-                                         (format "--not-%s=" v))
-                                   (cdr (assoc-string v
-                                                      props-alist))))))
-                 queries)))
-    items))
+  (nreverse
+   (seq-reduce (lambda (acc item)
+                 (if (stringp item)
+                     (push item acc)
+                   (pcase-let* ((`(,v . ,props) item)
+                                (k (substring-no-properties v 0 1))
+                                (pl (github-code-search--plist-remove
+                                     '(:incompatible)
+                                     props))
+                                (vals (list (append (list (format "%s" k) v
+                                                          (format "--%s=" v))
+                                                    pl)
+                                            (append (list
+                                                     (format "%s" (upcase k))
+                                                     (format "not %s" v)
+                                                     (format "--not-%s=" v))
+                                                    pl))))
+                     (dolist (option vals)
+                       (push option acc))))
+                 acc)
+               queries '())))
 
 (defun github-code-search-make-incompatible-queries (queries)
   "Generate incompatible QUERIES for GitHub code search.
 
 Argument QUERIES is a list of strings."
-  (mapcar (lambda (it)
-            (list (format "--%s=" it)
-                  (format "--not-%s=" it)))
-          queries))
+  (mapcar (pcase-lambda (`(,it . ,props))
+            (let ((extra (plist-get props :incompatible)))
+              (append (list (format "--%s=" it)
+                            (format "--not-%s=" it))
+                      (mapcar  (lambda (a)
+                                 (let ((format-str
+                                        (delq nil (list
+                                                   (unless (string-prefix-p "--"
+                                                                            a)
+                                                     "--")
+                                                   "%s"
+                                                   (unless (string-suffix-p "="
+                                                                            a)
+                                                     "=")))))
+                                   (format (string-join format-str) a)))
+                               (pcase extra
+                                 ((pred stringp)
+                                  (list extra))
+                                 (_ extra))))))
+          (seq-filter #'consp queries)))
 
 (defun github-code-search-get-args-for-query ()
   "Remove specific arguments from the GitHub code search query."
@@ -1855,10 +1895,27 @@ Argument ARGS is a list of strings, each representing a search argument."
   "Restrict search to the contents of the source code file, the file path, or both.
 When you omit this qualifier, only the file contents are searched."
   :class 'transient-switches
+  :description "in"
+  :init-value (lambda (obj)
+                (cond ((and (slot-boundp obj 'value)
+                            (oref obj value))
+                       (setf (slot-value obj 'value)
+                             (oref obj value)))
+                      (t (setf (slot-value obj 'value)
+                               "--in=file"))))
   :argument-format "--in=%s"
   :argument-regexp "\\(?:file\\(?:,path\\)?\\|path\\)"
   :choices '("file" "path" "file,path"))
 
+(transient-define-argument github-code-search-fork-argument ()
+  "By default, forks are not shown in search results.
+You can choose to include them in repository searches, and in code searches if
+they meet certain criteria."
+  :class 'transient-switches
+  :description "fork:"
+  :argument-format "--fork=%s"
+  :argument-regexp "\\(?:only\\|true\\)"
+  :choices '("true" "only"))
 
 (defun github-code-search-make-toggled-description (var &optional description
                                                         align)
@@ -1886,6 +1943,106 @@ Optional argument ALIGN is the column to align the toggle indicator; defaults to
               (symbol-value var))
          "[X]" "[ ]"))))
 
+(defun github-code-search-describe-query ()
+  "Display a description of the current GitHub code search query."
+  (let
+      ((result)
+       (code (github-code-search-get-arg-value-from-args "code"))
+       (filename-value (github-code-search-get-arg-value-from-args "filename")))
+    (if (and (not code)
+             (not filename-value))
+        (propertize "Search for (filename or code required)" 'face
+                    'transient-inapt-suffix)
+      (pcase-dolist (`(,arg . ,_props)
+                     (append (list (list "in")
+                                   (list "fork"))
+                             github-code-search-code-queries))
+        (let ((value (and arg (github-code-search-get-arg-value-from-args arg)))
+              (not-value (and arg
+                              (github-code-search-get-arg-value-from-args
+                               (concat
+                                "not-"
+                                arg)))))
+          (when (or value not-value)
+            (let* ((shortvalue (propertize
+                                (format "'%s'"
+                                        (truncate-string-to-width (or value
+                                                                      not-value)
+                                                                  20 nil
+                                                                  nil
+                                                                  t))
+                                'face 'transient-value))
+                   (parts
+                    (delq nil
+                          (pcase arg
+                            ("in" (list "that appears in"
+                                        (pcase value
+                                          ((pred not) "the file contents")
+                                          ("file" "the file contents")
+                                          ("path" "the path")
+                                          ((or "file,path" "path,file")
+                                           "the file contents or the path"))))
+                            ("extension" (list "with file extension" shortvalue))
+                            ("path"
+                             (list "within" shortvalue
+                                   "directory, or in any of its subdirectories"))
+                            ("language" (list "with language" shortvalue))
+                            ((or "org" "user")
+                             (list "owned by" shortvalue))
+                            ("fork"
+                             (pcase value
+                               ("true" (list "in sources and forks"))
+                               ("only" (list "only in forks"))))
+                            (_ (list arg shortvalue))))))
+              (when parts
+                (push (if not-value
+                          (concat "not " (string-join parts " "))
+                        (string-join parts " "))
+                      result))))))
+      (let ((shortcode-val (and code
+                                (propertize
+                                 (format "'%s'"
+                                         (truncate-string-to-width code 20
+                                                                   nil
+                                                                   nil
+                                                                   t))
+                                 'face 'transient-value)))
+            (filename-formatted-value (and filename-value
+                                           (propertize
+                                            (format "'%s'"
+                                                    (truncate-string-to-width
+                                                     filename-value
+                                                     20
+                                                     nil
+                                                     nil
+                                                     t))
+                                            'face
+                                            'transient-value)))
+            (prefix)
+            (pad-str (make-string
+                      (+ 2 (length
+                            "RET"))
+                      ?\s)))
+        (setq prefix (string-join (cond ((and filename-formatted-value shortcode-val)
+                                         (list "Search for" shortcode-val "in files named"
+                                               filename-formatted-value))
+                                        (filename-formatted-value
+                                         (list "Search for files named" filename-formatted-value))
+                                        (shortcode-val
+                                         (list "Search for" shortcode-val
+                                               (if (length> (split-string code nil t) 1)
+                                                   "occurences"
+                                                 "word"))))
+                                  " "))
+        (if result
+            (concat prefix "\n"
+                    (mapconcat
+                     (lambda (it)
+                       (concat pad-str "and " it))
+                     (reverse result)
+                     "\n"))
+          prefix)))))
+
 ;;;###autoload (autoload 'github-code-search "github-code-search" nil t)
 (transient-define-prefix github-code-search ()
   "A menu for GitHub code search with specific options."
@@ -1907,24 +2064,29 @@ Optional argument ALIGN is the column to align the toggle indicator; defaults to
                                                     (thing-at-point 'symbol t)
                                                     initial-input)
                                             history))
-                     :always-read t
+                     :always-read nil
                      :init-value (lambda (obj)
                                    (when-let ((value
-                                               (cond ((and (region-active-p)
-                                                           (use-region-p))
-                                                      (string-trim
-                                                       (buffer-substring-no-properties
-                                                        (region-beginning)
-                                                        (region-end))))
-                                                     ((oref obj value)
-                                                      (oref obj value))
-                                                     (t
-                                                      (when-let
-                                                          ((symb
-                                                            (symbol-at-point)))
-                                                        (symbol-name symb))))))
+                                               (cond
+                                                ((derived-mode-p
+                                                  'Github-code-search-result-mode)
+                                                 github-code-search--search-code)
+                                                ((and (region-active-p)
+                                                      (use-region-p))
+                                                 (string-trim
+                                                  (buffer-substring-no-properties
+                                                   (region-beginning)
+                                                   (region-end))))
+                                                ((oref obj value)
+                                                 (oref obj value))
+                                                (t
+                                                 (when-let ((symb
+                                                             (symbol-at-point)))
+                                                   (symbol-name symb))))))
                                      (oset obj value value))))
-               (list "i" "in" 'github-code-search-in-argument))
+               ""
+               (list "i" 'github-code-search-in-argument)
+               (list "r" "fork" 'github-code-search-fork-argument))
               (github-code-search-queries-to-options
                github-code-search-code-queries))))]
   ["Filtering"
@@ -1969,7 +2131,14 @@ Optional argument ALIGN is the column to align the toggle indicator; defaults to
   ["Actions"
    ("g g" "Browse" github-code-search-browse)
    ("g i" "Browse Gists" github-code-search-browse-gists)
-   ("RET" "Search" github-code-search-code)]
+   ("C-c C-a" "Copy query" (lambda ()
+                             (interactive)
+                             (let
+                                 ((query (github-code-search-query-description)))
+                               (kill-new query)
+                               (message "Copied: %s" query)
+                               query)))
+   ("RET" github-code-search-code :description github-code-search-describe-query)]
   (interactive)
   (github-code-search-auth)
   (unless github-code-search-initial-value
@@ -1995,6 +2164,203 @@ Optional argument ALIGN is the column to align the toggle indicator; defaults to
                                    (file-name-nondirectory
                                     buffer-file-name))))))))))
   (transient-setup #'github-code-search))
+
+(defun github-code-search--plist-remove (keys plist)
+  "Remove KEYS and values from PLIST."
+  (let* ((result (list 'head))
+         (last result))
+    (while plist
+      (let* ((key (pop plist))
+             (val (pop plist))
+             (new (and (not (memq key keys))
+                       (list key val))))
+        (when new
+          (setcdr last new)
+          (setq last (cdr new)))))
+    (cdr result)))
+
+(defun github-code-search--set-major-mode (filename)
+  "Set buffer's major mode based on FILENAME and ensure font-lock.
+
+Argument FILENAME is a string representing the name of the file for which to set
+the major mode."
+  (let ((buffer-file-name (or
+                           (if (file-name-absolute-p filename)
+                               filename
+                             (expand-file-name filename default-directory)))))
+    (ignore-errors
+      (set-auto-mode)
+      (font-lock-ensure))))
+
+(defun github-code-search--get-status-error (status)
+  "Display error details from GitHub code search status.
+
+Argument STATUS is a plist containing the status information, including any
+error details."
+  (when-let ((err (plist-get status :error)))
+    (concat (propertize
+             "github-code-search error: "
+             'face
+             'error)
+            (mapconcat (apply-partially #'format "%s")
+                       (delq nil
+                             (list (or
+                                    (when-let ((type
+                                                (ignore-errors
+                                                  (cadr
+                                                   err))))
+                                      type)
+                                    err)
+                                   (ignore-errors (caddr
+                                                   err))
+                                   (ignore-errors
+                                     (alist-get 'message
+                                                (car-safe
+                                                 (last
+                                                  err))))
+                                   (ignore-errors
+                                     (alist-get 'documentation_url
+                                                (car-safe
+                                                 (last
+                                                  err))))))
+                       " "))))
+
+(defun github-code-search--json-reader (&optional object-type array-type
+                                                  null-object false-object)
+  "Parse JSON from GitHub response.
+
+Optional argument OBJECT-TYPE specifies which Lisp type is used to represent
+objects; it can be `hash-table', `alist' or `plist'. It defaults to `alist'.
+
+Optional argument ARRAY-TYPE specifies which Lisp type is used to represent
+arrays; it can be `list' or `vector'. It defaults to `vector'.
+
+Optional argument NULL-OBJECT specifies which object to use to represent a JSON
+null value. It defaults to `:null'.
+
+Optional argument FALSE-OBJECT specifies which object to use to represent a JSON
+false value. It defaults to `:false'."
+  (let ((raw (ghub--decode-payload)))
+    (and raw
+         (condition-case nil
+             (github-code-search-json-parse-string raw
+                                                   object-type
+                                                   array-type
+                                                   null-object
+                                                   false-object)
+           ((json-parse-error json-readtable-error)
+            `((message
+               . ,(if (looking-at "<!DOCTYPE html>")
+                      (if (re-search-forward
+                           "<p>\\(?:<strong>\\)?\\([^<]+\\)"
+                           nil t)
+                          (match-string 1)
+                        "error description missing")
+                    (string-trim (buffer-substring
+                                  (point)
+                                  (point-max)))))
+              (documentation_url . "https://github.com/magit/ghub/wiki/Github-Errors")))))))
+
+(defun github-code-search--repo-get (resource &optional params &rest args)
+  "Retrieve a GitHub repository's data using specified RESOURCE and parameters.
+
+Argument RESOURCE: This is a required argument that specifies the RESOURCE to
+get from the GitHub repository.
+
+It should be a string.
+
+Optional argument PARAMS: This argument is optional and can be used to pass
+additional parameters to the `ghub-get' function.
+
+It should be a list.
+
+ARGS can be used to pass any number of additional arguments
+to the `ghub-get' function."
+  (let* ((auth (github-code-search-auth))
+         (query (plist-get args :query))
+         (query-str (mapconcat
+                     (pcase-lambda (`(,k . ,v))
+                       (format "%s=%s" k v))
+                     (seq-filter #'cdr query)
+                     "&"))
+         (url
+          (if (string-empty-p query-str)
+              resource
+            (concat (if (string-suffix-p "/" resource)
+                        (substring-no-properties resource (1- (length
+                                                               resource)))
+                      resource)
+                    "?" query-str))))
+    (apply #'ghub-get url params
+           :auth (cdr auth)
+           :username (car auth)
+           (github-code-search--plist-remove '(:query)
+                                             args))))
+
+(defun github-code-search--get-other-wind ()
+  "Return another window or split sensibly if needed."
+  (let ((wind-target
+         (if (minibuffer-selected-window)
+             (with-minibuffer-selected-window
+               (let ((wind (selected-window)))
+                 (or
+                  (window-right wind)
+                  (window-left wind)
+                  (split-window-sensibly)
+                  wind)))
+           (let ((wind (selected-window)))
+             (or
+              (window-right wind)
+              (window-left wind)
+              (split-window-sensibly)
+              wind)))))
+    wind-target))
+
+(defun github-code-search-tree--fetch-repo-tree (repo &optional callback
+                                                      on-error)
+  "Fetch GitHub REPO's file structure as a tree.
+
+Argument REPO is a string representing the GitHub repository in the format
+\"owner/repo\".
+
+Optional argument CALLBACK is a function to be called with the result of the
+fetch operation.
+
+Optional argument ON-ERROR is a function to be called if an error occurs during
+the fetch operation."
+  (github-code-search--repo-get (format "repos/%s/git/trees/HEAD:?recursive=1"
+                                        repo)
+                                nil
+                                :reader
+                                (lambda (&rest _)
+                                  (github-code-search--json-reader
+                                   'alist
+                                   'list))
+                                :callback (lambda (response &rest _)
+                                            (let* ((tree (cdr (assq 'tree
+                                                                    response)))
+                                                   (value (github-code-search--paths-put
+                                                           repo
+                                                           (seq-filter
+                                                            (lambda (x)
+                                                              (when (equal
+                                                                     (cdr
+                                                                      (assq
+                                                                       'type
+                                                                       x))
+                                                                     "blob")
+                                                                (cdr (assoc
+                                                                      'path x))))
+                                                            tree))))
+                                              (if callback
+                                                  (funcall callback value)
+                                                tree)))
+                                :errorback (lambda (_err _headers status _req)
+                                             (if-let ((err
+                                                       (github-code-search--get-status-error
+                                                        status)))
+                                                 (funcall
+                                                  (or on-error #'message) err)))))
 
 (provide 'github-code-search)
 ;;; github-code-search.el ends here

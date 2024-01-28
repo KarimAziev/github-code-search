@@ -20,12 +20,12 @@ Search code on GitHub within Emacs.
 
 * Requirements
 
-| Name                         | Version |
-|------------------------------+---------|
-| Emacs                        |    28.1 |
-| ~transient~                  |   0.4.1 |
-| ~ghub~                       |   3.6.0 |
-| ~github-explorer~ (optional) |   1.1.0 |
+| Name                                                            | Version |
+|-----------------------------------------------------------------+---------|
+| Emacs                                                           |    28.1 |
+| ~transient~                                                     |   0.4.1 |
+| ~ghub~                                                          |   3.6.0 |
+| ~[[https://github.com/KarimAziev/gh-repo][gh-repo]]~ (optional) |   1.1.0 |
 
 
 * Installation
@@ -35,6 +35,13 @@ Search code on GitHub within Emacs.
 (use-package github-code-search
   :straight (github-code-search
              :repo "KarimAziev/github-code-search"
+             :type git
+             :host github))
+
+;; optionally, for viewing repository tree, readme and files
+(use-package gh-repo
+  :straight (gh-repo
+             :repo "KarimAziev/gh-repo"
              :type git
              :host github))
 #+end_src

@@ -241,11 +241,12 @@ paths."
 (defvar-local github-code-search--search-code nil)
 (defvar-local github-code-search--search-extra-query nil)
 (defvar-local github-code-search-response nil)
-(defvar-local github-code-search-exact nil)
 (defvar-local github-code-search-total-count nil)
 (defvar-local github-code-search-loading nil)
+(defvar-local github-code-search-error nil)
 (defvar-local github-code-search-page 1)
 (defvar-local github-code-search-uniq nil)
+(defvar-local github-code-search-exact nil)
 
 (defmacro github-code-search-window-with-other-window (&rest body)
   "Execute BODY in other window.
@@ -827,7 +828,7 @@ Argument REPO is the name of the repository to view files from."
          (exact (transient-arg-value "--exact" args))
          (uniq (transient-arg-value "--uniq" args)))
     (setq github-code-search-initial-value args)
-    (github-code-search-request code query exact
+    (github-code-search-request code query 1 exact
                                 uniq)))
 
 (defun github-code-search-read-auth-marker ()
@@ -1176,6 +1177,27 @@ results are returned, with the search results passed as an argument."
                   `(("Accept" . "application/vnd.github.text-match+json"))
                   :forge 'github
                   :host "api.github.com"
+                  :errorback (lambda (_err _headers status _req)
+                               (let ((err
+                                      (github-code-search--get-status-error
+                                       status)))
+                                 (when-let
+                                     ((buff
+                                       (get-buffer
+                                        github-code-search-result-buffer-name)))
+                                   (with-current-buffer buff
+                                     (setq github-code-search-loading nil
+                                           github-code-search-error
+                                           (or err
+                                               "An error occured")
+                                           github-code-search-page
+                                           (max 1
+                                                (1- page)))
+                                     (github-code-search-spinner--stop)
+                                     (github-code-search-spinner-cleanup)
+                                     (github-code-search-update-header-line)))
+                                 (message (or err
+                                              "An error occured"))))
                   :callback
                   (lambda (value _headers status _req)
                     (let ((buffer (get-buffer
@@ -1206,10 +1228,10 @@ results are returned, with the search results passed as an argument."
           github-code-search-total-count
           (> github-code-search-total-count
              (length github-code-search-response)))
-         (setq github-code-search-page (1+ github-code-search-page)
-               github-code-search-loading t)
+         (setq github-code-search-loading t)
          (github-code-search-request github-code-search--search-code
                                      github-code-search--search-extra-query
+                                     (1+ github-code-search-page)
                                      github-code-search-exact
                                      github-code-search-uniq))))
 
@@ -1501,79 +1523,74 @@ text matches a specific regular expression."
   (setq github-code-search-uniq (not github-code-search-uniq))
   (github-code-search-revert))
 
-(defun github-code-search-request (code query &optional exact uniq)
-  "Create a GitHub CODE search request and display the results in a buffer.
+(defun github-code-search-request (code query page &optional exact uniq)
+  "Search GitHub CODE and display results.
 
-Argument CODE is the code snippet or keyword that the user wants to search for
-in the GitHub codebase.
-Argument QUERY is the additional search parameters or filters that the user
-wants to apply to the code search.
-Argument EXACT is an optional argument that, when true, will make the search
-return only EXACT matches to the provided code.
-Argument UNIQ is an optional argument that, when true, will make the search
-return only unique matches, removing any duplicates from the results."
+Argument CODE is the code snippet or keyword to search for.
+
+Argument QUERY is the additional search parameters or filters.
+
+Argument PAGE is the specific page number of the search results.
+
+Optional argument EXACT is a boolean flag for exact match searches.
+
+Optional argument UNIQ is a boolean flag for unique match searches."
   (let ((buffer (get-buffer-create
                  github-code-search-result-buffer-name)))
     (with-current-buffer buffer
-      (unless (derived-mode-p 'github-code-search-result-mode)
-        (github-code-search-result-mode))
-      (cond ((and (equal code github-code-search--search-code)
-                  (equal query github-code-search--search-extra-query)
-                  (or (not (equal github-code-search-uniq uniq))
-                      (not (equal github-code-search--search-extra-query
-                                  exact))))
-             (setq github-code-search-exact exact)
-             (setq github-code-search-uniq uniq)
-             (github-code-search-revert)
-             (unless (get-buffer-window buffer)
-               (pop-to-buffer buffer)
-               (select-window (get-buffer-window buffer))))
-            (t
-             (setq github-code-search-loading t)
-             (when (or (not (equal code github-code-search--search-code))
-                       (not (equal query
-                                   github-code-search--search-extra-query)))
-               (let ((inhibit-read-only t))
-                 (erase-buffer))
-               (setq github-code-search-page 1)
-               (setq github-code-search--search-code code)
-               (setq github-code-search-response nil)
-               (setq github-code-search-total-count nil)
+      (let ((query-same
+             (and (equal code github-code-search--search-code)
+                  (equal query github-code-search--search-extra-query))))
+        (unless (derived-mode-p 'github-code-search-result-mode)
+          (github-code-search-result-mode))
+        (unless (get-buffer-window buffer)
+          (github-code-search-window-with-other-window
+           (pop-to-buffer-same-window buffer)))
+        (cond ((and
+                query-same
+                (not github-code-search-error)
+                (= page github-code-search-page)
+                (or (not (equal github-code-search-uniq uniq))
+                    (not (equal github-code-search--search-extra-query
+                                exact))))
                (setq github-code-search-exact exact)
                (setq github-code-search-uniq uniq)
-               (setq github-code-search--search-extra-query query))
-             (github-code-search-update-header-line)
-             (github-code-search-spinner-start)
-             (setq github-code-search--search-code code)
-             (setq github-code-search--search-extra-query query)
-             (github-code-search-async-request
-              code query github-code-search-page
-              (lambda (value)
-                (let ((items (alist-get 'items value)))
-                  (when (buffer-live-p buffer)
-                    (with-current-buffer buffer
-                      (setq github-code-search-loading nil)
-                      (setq github-code-search-exact exact)
-                      (when (zerop (length (alist-get 'items value)))
-                        (setq github-code-search-page
-                              (max 1
-                                   (1- github-code-search-page))))
-                      (setq github-code-search-uniq uniq)
-                      (setq github-code-search-total-count
-                            (or
-                             (alist-get 'total_count value)
-                             github-code-search-total-count))
-                      (setq buffer-read-only t)
-                      (let ((inhibit-read-only t))
-                        (when items
-                          (setq github-code-search-response
-                                (if github-code-search-response
-                                    (append github-code-search-response items)
-                                  items)))
-                        (github-code-search-revert)))
-                    (unless (get-buffer-window buffer)
-                      (pop-to-buffer buffer)
-                      (select-window (get-buffer-window buffer))))))))))))
+               (github-code-search-revert))
+              (t
+               (unless query-same
+                 (let ((inhibit-read-only t))
+                   (erase-buffer)
+                   (setq github-code-search-response nil
+                         github-code-search-total-count nil)))
+               (setq github-code-search--search-code code
+                     github-code-search--search-extra-query query
+                     github-code-search-loading t
+                     github-code-search-page page
+                     github-code-search-error nil
+                     github-code-search-exact exact
+                     github-code-search-uniq uniq)
+               (github-code-search-update-header-line)
+               (github-code-search-spinner-start)
+               (github-code-search-async-request
+                code query github-code-search-page
+                (lambda (value)
+                  (let ((items (alist-get 'items value)))
+                    (when (buffer-live-p buffer)
+                      (with-current-buffer buffer
+                        (setq github-code-search-loading nil
+                              github-code-search-error nil)
+                        (setq github-code-search-total-count
+                              (or
+                               (alist-get 'total_count value)
+                               github-code-search-total-count))
+                        (setq buffer-read-only t)
+                        (let ((inhibit-read-only t))
+                          (when items
+                            (setq github-code-search-response
+                                  (if github-code-search-response
+                                      (append github-code-search-response items)
+                                    items)))
+                          (github-code-search-revert)))))))))))))
 
 (defun github-code-search-fontify (code name)
   "Highlight CODE syntax for GitHub CODE search.
@@ -1608,9 +1625,18 @@ results that are not displayed."
                                      (or github-code-search-total-count 0))
                          'face
                          'font-lock-number-face))
-                (if github-code-search-loading
-                    (propertize " Loading" 'face 'warning)
-                  (propertize " Ready" 'face 'success))
+                (cond (github-code-search-loading
+                       (propertize " Loading" 'face 'warning))
+                      ((stringp github-code-search-error)
+                       (propertize
+                        (truncate-string-to-width
+                         github-code-search-error
+                         70)
+                        'face
+                        'error))
+                      (github-code-search-error
+                       "Error")
+                      (t (propertize " Ready" 'face 'success)))
                 (string-join (delq nil
                                    (list
                                     (when github-code-search-uniq

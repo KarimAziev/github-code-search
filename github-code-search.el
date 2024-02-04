@@ -2099,7 +2099,7 @@ Optional argument ALIGN is the column to align the toggle indicator; defaults to
                                    (when-let ((value
                                                (cond
                                                 ((derived-mode-p
-                                                  'Github-code-search-result-mode)
+                                                  'github-code-search-result-mode)
                                                  github-code-search--search-code)
                                                 ((and (region-active-p)
                                                       (use-region-p))

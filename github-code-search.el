@@ -2085,7 +2085,7 @@ Optional argument ALIGN is the column to align the toggle indicator; defaults to
    (lambda (&rest _argsn)
      (mapcar
       (apply-partially #'transient-parse-suffix
-                       transient--prefix)
+                       (oref transient--prefix command))
       (append (list
                (list "c" "code" "--code="
                      :class 'transient-option

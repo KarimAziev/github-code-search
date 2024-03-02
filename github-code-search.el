@@ -2118,7 +2118,8 @@ Optional argument ALIGN is the column to align the toggle indicator; defaults to
                (list "i" 'github-code-search-in-argument)
                (list "r" "fork" 'github-code-search-fork-argument))
               (github-code-search-queries-to-options
-               github-code-search-code-queries))))]
+               github-code-search-code-queries))))
+   :class transient-column]
   ["Filtering"
    ("x" "Exact matches" "--exact" :if-not-derived github-code-search-result-mode)
    ("D" "Delete dublicates" "--uniq" :if-not-derived

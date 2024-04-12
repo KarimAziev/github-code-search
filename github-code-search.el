@@ -1070,7 +1070,7 @@ represent a JSON false value.  It defaults to `:false'."
 
 
 (defun github-code-search-get-browse-query ()
-  "Generate URL query for browser from transient arguments."
+  "Return a URL query for the browser based on the transient arguments."
   (let* ((code (github-code-search-get-arg-value-from-args "code"))
          (path (github-code-search-get-arg-value-from-args "filename"))
          (query
@@ -1098,7 +1098,7 @@ represent a JSON false value.  It defaults to `:false'."
 
 ;;;###autoload
 (defun github-code-search-browse-gists ()
-  "Search GitHub gists online."
+  "Search gists based on the transient arguments and open them in the browser."
   (interactive)
   (setq github-code-search-initial-value (github-code-search-get-arguments))
   (funcall github-code-search-word-browse-fn
@@ -1107,7 +1107,7 @@ represent a JSON false value.  It defaults to `:false'."
 
 ;;;###autoload
 (defun github-code-search-browse ()
-  "Search GitHub code via a web browser."
+  "Open a GitHub search page with the current transient arguments in the browser."
   (interactive)
   (setq github-code-search-initial-value (github-code-search-get-arguments))
   (funcall github-code-search-word-browse-fn

@@ -1926,13 +1926,6 @@ Argument ARGS is a list of strings, each representing a search argument."
 When you omit this qualifier, only the file contents are searched."
   :class 'transient-switches
   :description "in"
-  :init-value (lambda (obj)
-                (cond ((and (slot-boundp obj 'value)
-                            (oref obj value))
-                       (setf (slot-value obj 'value)
-                             (oref obj value)))
-                      (t (setf (slot-value obj 'value)
-                               "--in=file"))))
   :argument-format "--in=%s"
   :argument-regexp "\\(?:file\\(?:,path\\)?\\|path\\)"
   :choices '("file" "path" "file,path"))

@@ -99,7 +99,9 @@ will use the information provided by this variable."
                                              ("language"
                                               :choices
                                               github-code-search-languages-choices
-                                              :always-read t
+                                              :always-read nil
+                                              :init-value
+                                              github-code-search--init-lang-value
                                               :class transient-option)
                                              ""
                                              "By file or directory"
@@ -965,40 +967,61 @@ When SEMICOLONS is given, the separator will be \";\"."
     (url-build-query-string
      filtered-list semicolons keep-empty)))
 
+(defun github-code-search--init-lang-value (obj)
+  "Set object's value to a language from history or default based on mode.
+
+Argument OBJ is an object to initialize with a language value."
+  (if-let* ((pos (oref transient--prefix
+                       history-pos))
+            (hst (oref transient--prefix
+                       history))
+            (curr (and pos hst (nth pos hst)))
+            (hist-value (github-code-search--arg-value
+                         "language" curr)))
+      (oset obj value hist-value)
+    (when-let ((value
+                (github-code-search-get-default-language)))
+      (oset obj value value))))
+
 (defun github-code-search-get-default-language ()
   "Return default github language depending on `major-mode'."
-  (pcase major-mode
-    ((or 'emacs-lisp-mode 'lisp-interaction-mode)
-     "elisp")
-    ((or 'python-ts-mode 'python-mode)
-     "python")
-    ((or 'cmake-ts-mode 'cmake-mode)
-     "cmake")
-    ((or 'c-or-c++-ts-mode
-         'c-ts-base-mode
-         'c-mode)
-     "c")
-    ((or 'yaml-ts-mode 'yaml-mode)
-     "yaml")
-    ((or 'html-ts-mode 'html-mode)
-     "html")
-    ((or 'css-ts-mode 'css-mode)
-     "css")
-    ((or 'typescript-ts-mode
-         'typescript-ts-base-mode
-         'typescript-mode)
-     "typescript")
-    ((or 'bash-ts-mode 'sh-mode)
-     "shell")
-    ((or 'java-ts-mode)
-     "java")
-    ((or 'js-ts-mode
-         'js-mode 'js-base-mode 'js2-mode)
-     "javascript")
-    ((or 'json-ts-mode 'json-mode)
-     "json")
-    ((or 'clojurescript-mode 'clojure-mode) "clojure")
-    ('org-mode "org")))
+  (or
+   (when github-code-search-langs-alist
+     (let ((langs (github-code-search-languages-choices)))
+       (car (member (car (split-string (format "%s" major-mode) "-" t))
+                    langs))))
+   (pcase major-mode
+     ((or 'emacs-lisp-mode 'lisp-interaction-mode)
+      "elisp")
+     ((or 'python-ts-mode 'python-mode)
+      "python")
+     ((or 'cmake-ts-mode 'cmake-mode)
+      "cmake")
+     ((or 'c-or-c++-ts-mode
+          'c-ts-base-mode
+          'c-mode)
+      "c")
+     ((or 'yaml-ts-mode 'yaml-mode)
+      "yaml")
+     ((or 'html-ts-mode 'html-mode)
+      "html")
+     ((or 'css-ts-mode 'css-mode)
+      "css")
+     ((or 'typescript-ts-mode
+          'typescript-ts-base-mode
+          'typescript-mode)
+      "typescript")
+     ((or 'bash-ts-mode 'sh-mode)
+      "shell")
+     ((or 'java-ts-mode)
+      "java")
+     ((or 'js-ts-mode
+          'js-mode 'js-base-mode 'js2-mode)
+      "javascript")
+     ((or 'json-ts-mode 'json-mode)
+      "json")
+     ((or 'clojurescript-mode 'clojure-mode) "clojure")
+     ('org-mode "org"))))
 
 (defun github-code-search-json-parse-string (str &optional object-type
                                                  array-type null-object
@@ -1831,7 +1854,8 @@ Argument QUERIES is a list."
                                                      (format "%s" (upcase k))
                                                      (format "not %s" v)
                                                      (format "--not-%s=" v))
-                                                    pl))))
+                                                    (github-code-search--plist-remove
+                                                     '(:init-value) pl)))))
                      (dolist (option vals)
                        (push option acc))))
                  acc)
@@ -2094,29 +2118,43 @@ Optional argument ALIGN is the column to align the toggle indicator; defaults to
                      :class 'transient-option
                      :reader (lambda (&optional prompt initial-input history)
                                (read-string prompt (or
+                                                    (and (region-active-p)
+                                                         (use-region-p)
+                                                         (buffer-substring-no-properties
+                                                          (region-beginning)
+                                                          (region-end)))
                                                     (thing-at-point 'symbol t)
                                                     initial-input)
                                             history))
-                     :always-read nil
+                     :always-read t
                      :init-value (lambda (obj)
-                                   (when-let ((value
-                                               (cond
-                                                ((derived-mode-p
-                                                  'github-code-search-result-mode)
-                                                 github-code-search--search-code)
-                                                ((and (region-active-p)
-                                                      (use-region-p))
-                                                 (string-trim
-                                                  (buffer-substring-no-properties
-                                                   (region-beginning)
-                                                   (region-end))))
-                                                ((oref obj value)
-                                                 (oref obj value))
-                                                (t
-                                                 (when-let ((symb
-                                                             (symbol-at-point)))
-                                                   (symbol-name symb))))))
-                                     (oset obj value value))))
+                                   (if-let* ((pos (oref transient--prefix
+                                                        history-pos))
+                                             (hst (oref transient--prefix
+                                                        history))
+                                             (curr (and pos hst (nth pos hst)))
+                                             (hist-value (github-code-search--arg-value
+                                                          "code" curr)))
+                                       (oset obj value hist-value)
+                                     (when-let ((value
+                                                 (cond
+                                                  ((derived-mode-p
+                                                    'github-code-search-result-mode)
+                                                   github-code-search--search-code)
+                                                  ((and (region-active-p)
+                                                        (use-region-p))
+                                                   (string-trim
+                                                    (buffer-substring-no-properties
+                                                     (region-beginning)
+                                                     (region-end))))
+                                                  ((oref obj value)
+                                                   (oref obj value))
+                                                  (t
+                                                   (when-let
+                                                       ((symb
+                                                         (symbol-at-point)))
+                                                     (symbol-name symb))))))
+                                       (oset obj value value)))))
                ""
                (list "i" 'github-code-search-in-argument)
                (list "r" "fork" 'github-code-search-fork-argument))

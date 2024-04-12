@@ -1868,18 +1868,26 @@ Argument QUERIES is a list of strings."
    (apply-partially  #'string-match-p "^--\\(exact\\|uniq\\)")
    (github-code-search-get-arguments)))
 
-(defun github-code-search-get-arg-value-from-args (arg)
-  "Extract the ARG value from the argument list in a GitHub code search."
+(defun github-code-search--arg-value (arg args)
+  "Extract and return the value of ARG from a list of ARGS.
+
+Argument ARG is the name of the argument to search for in ARGS.
+
+Argument ARGS is a list of command-line arguments as strings."
   (when-let ((argument (seq-find
                         (apply-partially #'string-match-p
                                          (concat "--"
                                                  (regexp-quote
                                                   arg)
                                                  "="))
-                        (github-code-search-get-args-for-query))))
+                        args)))
     (let ((parts
            (split-string argument "=" t)))
       (string-join (seq-drop parts 1) "="))))
+
+(defun github-code-search-get-arg-value-from-args (arg)
+  "Extract the ARG value from the argument list in a GitHub code search."
+  (github-code-search--arg-value arg (github-code-search-get-args-for-query)))
 
 (defun github-code-search-query-description ()
   "Formats a GitHub code search query based on specified arguments."

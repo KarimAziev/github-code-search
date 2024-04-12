@@ -1067,8 +1067,10 @@ represent a JSON false value.  It defaults to `:false'."
           (buffer-string))
       (kill-buffer download-buffer))))
 
+
+
 (defun github-code-search-get-browse-query ()
-  "Generate GitHub code search URL from arguments."
+  "Generate URL query for browser from transient arguments."
   (let* ((code (github-code-search-get-arg-value-from-args "code"))
          (path (github-code-search-get-arg-value-from-args "filename"))
          (query
@@ -1077,7 +1079,7 @@ represent a JSON false value.  It defaults to `:false'."
                                      (seq-remove
                                       (apply-partially
                                        #'string-match-p
-                                       "^--\\(filename\\|code\\)=")
+                                       "^--\\(in\\|filename\\|code\\)=")
                                       (github-code-search-get-args-for-query)))))
          (type
           (cond ((and path (or (not code)

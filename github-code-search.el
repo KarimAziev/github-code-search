@@ -365,12 +365,39 @@ as its argument."
   "Preview a GitHub repo file without exiting minibuffer."
   (interactive)
   (github-code-search-minibuffer-action-no-exit
-   #'github-code-search-preview-repo-file-action))
+   (lambda (path)
+     (let* ((wnd (active-minibuffer-window))
+            (repo (github-code-search-current-buffer-repo)))
+       (with-selected-window wnd
+         (let ((prompt (minibuffer-prompt)))
+           (when (string-prefix-p (concat repo "/") prompt)
+             (setq path (concat
+                         (substring-no-properties
+                          prompt
+                          (1+ (length repo)))
+                         path)))))
+       (if (github-code-search--find-by-path
+            path
+            (github-code-search--paths-get repo))
+           (github-code-search-preview-repo-file-action path)
+         (and wnd
+              (with-selected-window wnd
+                (when-let ((key (where-is-internal
+                                 'exit-minibuffer
+                                 minibuffer-mode-map
+                                 t t
+                                 t)))
+                  (execute-kbd-macro key)))))))))
 
 (defvar github-code-search-minibuffer-file-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "C-j")
                 #'github-code-search-minibuffer-preview-file)
+    (define-key map [remap backward-kill-word]
+                #'github-code-search-maybe-throw-up)
+    (define-key map (kbd "C-<backspace>") #'github-code-search-throw-up)
+    (define-key map (kbd "C-l") #'github-code-search-throw-up)
+    (define-key map (kbd "C-.") #'github-code-search-throw-next)
     map)
   "Keymap for minibuffer file search with preview function.")
 
@@ -428,13 +455,12 @@ Argument PATH is a string representing the path within the repository to
 preview."
   (let* ((repo (github-code-search-current-buffer-repo))
          (tree (github-code-search--paths-get repo))
-         (url (cdr (assq 'url (seq-find (lambda (it)
-                                          (equal path (cdr (assq 'path it))))
-                                        tree)))))
-    (github-code-search-download-repo-path
-     repo
-     path
-     url)))
+         (url (cdr (assq 'url (github-code-search--find-by-path path tree)))))
+    (when url
+      (github-code-search-download-repo-path
+       repo
+       path
+       url))))
 
 (defun github-code-search-kill-repo-buffers (&optional repo)
   "Close buffers related to GitHub code search.
@@ -501,43 +527,238 @@ Remaining arguments ARGS are passed to FN when it is called."
                         fn
                         args)))
 
-(defun github-code-search-find-other-file (repo)
-  "Switch to a file from a GitHub repo.
+(defun github-code-search--find-by-path (path paths)
+  "Find and return the alist whose `path' key matches PATH in PATHS.
 
-Argument REPO is a string representing the name of the GitHub repository."
-  (interactive (list (github-code-search-current-buffer-repo)))
-  (let ((complete-fn (lambda (tree)
-                       (let* ((alist   (mapcar
-                                        (lambda (x)
-                                          (cons (cdr (assq 'path x))
-                                                (cdr (assq 'url x))))
-                                        tree))
-                              (path
+PATH is a string to match against the `path' key in each alist.
+
+PATHS is a list of alists, each representing a code item."
+  (seq-find (lambda (alist)
+              (when-let ((item-path (cdr (assq 'path alist))))
+                (string= item-path path)))
+            paths))
+
+(defun github-code-search--sort-paths (paths)
+  "Sort PATHS, prioritizing cons cells over other elements.
+
+Argument PATHS is a list of file paths to be sorted."
+  (seq-sort-by (lambda (it)
+                 (if (consp it) 1 -1))
+               #'> paths))
+
+(defun github-code-search--get-from-alist (path alist)
+  "Return a value obtained by traversing an association list using a given PATH.
+Argument PATH is a list representing the PATH to traverse in the association
+list.
+Argument ALIST is the association list to traverse."
+  (let* ((fns (mapcar (lambda (key)
+                        (lambda (val)
+                          (when (listp val)
+                            (cdr-safe (if (stringp key)
+                                          (assoc-string key val)
+                                        (assq key val))))))
+                      path))
+         (start-val (funcall (pop fns) alist)))
+    (seq-reduce
+     (lambda (acc fn)
+       (setq acc (funcall fn acc)))
+     fns
+     start-val)))
+
+
+
+(defun github-code-search-throw-up ()
+  "Throw a non-local exit with tag up."
+  (interactive)
+  (throw 'up t))
+
+(defun github-code-search-maybe-throw-up ()
+  "Throw an error if minibuffer is empty, else delete the last word."
+  (interactive)
+  (if (string-empty-p (string-trim (minibuffer-contents-no-properties)))
+      (throw 'up t)
+    (backward-kill-word 1)))
+
+(defun github-code-search-throw-next ()
+  "Throw a non-local exit with tag next."
+  (interactive)
+  (throw 'next 1))
+
+
+(defun github-code-search-tree--group-files (files)
+  "Group FILES by their directory structure."
+  (let ((tree (github-code-search--tree--group-files-1
+               (mapcar (lambda (it)
+                         (alist-get 'path it))
+                       files))))
+    tree))
+
+
+(defun github-code-search--tree--group-files-1 (files)
+  "Group FILES into a tree structure based on their paths.
+
+Argument FILES is a list of file paths to be grouped."
+  (cl-labels ((insert (tree parts)
+                (let ((node (assoc (car parts) tree)))
+                  (if (cdr parts)
+                      (progn
+                        (unless node
+                          (setq node (list (car parts)))
+                          (setq tree (append tree (list node))))
+                        (setcdr node (insert (cdr node)
+                                             (cdr parts))))
+                    (unless (member (car parts) tree)
+                      (setq tree (append tree (list (car parts)))))))
+                tree))
+    (let ((tree '()))
+      (dolist (file files tree)
+        (setq tree (insert tree (split-string file "/" t))))
+      tree)))
+
+(defun github-code-search--read-file-tree-full (repo tree &rest _)
+  "Prompt user to select a file from a GitHub repository's file tree.
+
+Argument REPO is a string representing the GitHub repository.
+
+Argument TREE is a list of alists where each alist represents a file in the
+repository.
+
+Remaining arguments _ are ignored."
+  (let ((alist   (mapcar
+                  (lambda (x)
+                    (cons (cdr (assq 'path x))
+                          (cdr (assq 'url x))))
+                  tree)))
+    (github-code-search-completing-read-with-keymap
+     repo
+     (mapcar
+      #'car
+      alist)
+     github-code-search-minibuffer-file-map)))
+
+(defun github-code-search--read-file-name (prompt paths &optional initial-path)
+  "PROMPT user to select a file from a structured list with completion.
+
+Argument PROMPT is a string to prompt the user.
+
+Argument PATHS is a list of file paths.
+
+Optional argument INITIAL-PATH is the initial file path to preselect."
+  (require 'gh-repo nil t)
+  (let* ((groupped-alist (github-code-search-tree--group-files paths))
+         (alist groupped-alist)
+         (annot-fn (lambda (str)
+                     (if (stringp (assoc-string str alist))
+                         ""
+                       "/")))
+         (full-path initial-path))
+    (when full-path
+      (let ((parts (split-string full-path "/" t)))
+        (setq alist (and parts
+                         (github-code-search--get-from-alist parts
+                                                             groupped-alist)))
+        (unless alist
+          (setq parts (butlast parts 1))
+          (setq full-path (and parts
+                               (string-join parts "/")))
+          (setq alist (if parts (github-code-search--get-from-alist parts
+                                                                    groupped-alist)
+                        groupped-alist)))))
+    (catch 'done
+      (while
+          (let ((item (catch 'up
+                        (let ((choice
                                (github-code-search-completing-read-with-keymap
-                                repo
-                                (mapcar
-                                 #'car
-                                 alist)
-                                github-code-search-minibuffer-file-map
+                                (string-join
+                                 (delq
+                                  nil
+                                  (list
+                                   prompt
+                                   full-path
+                                   ""))
+                                 "/")
                                 (lambda
-                                  ()
-                                  (add-hook
-                                   'after-change-functions
-                                   (lambda
-                                     (&rest
-                                      _)
-                                     (github-code-search--debounce
-                                      'github-code-search-minibuffer-timer
-                                      1
-                                      'github-code-search-minibuffer-preview-file))
-                                   nil
-                                   t))))
-                              (url (cdr (assoc-string path
-                                                      alist))))
-                         (github-code-search-download-repo-path
-                          repo
-                          path
-                          url)))))
+                                  (str
+                                   pred
+                                   action)
+                                  (if
+                                      (eq
+                                       action
+                                       'metadata)
+                                      `(metadata
+                                        (annotation-function
+                                         .
+                                         ,annot-fn)
+                                        (display-sort-function . github-code-search--sort-paths))
+                                    (complete-with-action
+                                     action
+                                     (github-code-search--sort-paths
+                                      alist)
+                                     str
+                                     pred)))
+                                github-code-search-minibuffer-file-map)))
+                          (assoc-string choice alist)))))
+            (cond ((eq item t)
+                   (let ((parts
+                          (and full-path
+                               (butlast (split-string full-path "/" t) 1))))
+                     (setq full-path (when parts
+                                       (string-join parts "/")))
+                     (setq alist (if parts
+                                     (github-code-search--get-from-alist
+                                      parts
+                                      groupped-alist)
+                                   groupped-alist))))
+                  ((stringp item)
+                   (setq full-path (string-join (delq nil
+                                                      (list full-path
+                                                            item))
+                                                "/"))
+                   (throw 'done full-path))
+                  ((consp item)
+                   (setq full-path (string-join
+                                    (delq
+                                     nil
+                                     (list full-path
+                                           (car item)))
+                                    "/"))
+                   (setq alist (cdr item)))))))))
+
+(defun github-code-search--read-tree-file (&rest args)
+  "Iterate through file readers until one successfully read a tree file.
+
+Remaining arguments ARGS are strings passed as command arguments to
+`github-code-search--read-tree-file' and
+`github-code-search--read-file-tree-full'."
+  (let ((readers '(github-code-search--read-file-tree-full
+                   github-code-search--read-file-name))
+        (idx 0)
+        (result))
+    (while (numberp (catch 'next
+                      (let ((reader (nth idx readers)))
+                        (setq result (apply reader args)))))
+      (setq idx (if (nth (1+ idx) readers)
+                    (1+ idx)
+                  0)))
+    result))
+
+(defun github-code-search-find-other-file (repo &optional initial-path)
+  "Switch to another file in the GitHub repository.
+
+Argument REPO is the GitHub repository to search in.
+
+Optional argument INITIAL-PATH is the initial file path to start the search
+from."
+  (interactive (list (github-code-search-current-buffer-repo)
+                     (cdr (github-code-search-tree--current-repo-path))))
+  (let ((complete-fn (lambda (tree)
+                       (let* ((path
+                               (github-code-search--read-file-name repo tree
+                                                                   initial-path))
+                              (cell (github-code-search--find-by-path path tree))
+                              (url (cdr (assq 'url cell))))
+                         (github-code-search-download-repo-path repo path
+                                                                url)))))
     (if (github-code-search--paths-get repo)
         (funcall complete-fn (github-code-search--paths-get repo))
       (github-code-search-tree--fetch-repo-tree
@@ -731,13 +952,23 @@ code."
 (defun github-code-search-load-code-result-at-point ()
   "Download and display full file for the code result at the current point."
   (interactive)
-  (let ((item (get-text-property (point) 'github-code-search-item))
-        (str
-         (get-text-property (point)
-                            'github-code-search-str)))
-    (github-code-search-window-with-other-window
-     (github-code-search-download-code item
-                                       str))))
+  (let* ((position (point))
+         (item (get-text-property position 'github-code-search-item)))
+    (unless item
+      (setq position (cond ((and (bolp)
+                                 (not (eobp)))
+                            (1+ position))
+                           ((and (eolp)
+                                 (not (bobp)))
+                            (1- (line-end-position)))
+                           (t (user-error "No code item"))))
+      (setq item (get-text-property position 'github-code-search-item)))
+    (let ((str
+           (get-text-property position
+                              'github-code-search-str)))
+      (github-code-search-window-with-other-window
+       (github-code-search-download-code item
+                                         str)))))
 
 (defun github-code-search--gh-repo-action (fn &rest args)
   "Execute FN with ARGS if gh-repo is available, else prompt to install.

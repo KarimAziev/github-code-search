@@ -2009,13 +2009,13 @@ search."
                              (when (progn
                                      (require 'gh-repo nil t)
                                      (fboundp 'gh-repo-clone-repo))
-                               (buttonize "Clone repo "
+                               (buttonize "Clone repo"
                                           #'gh-repo-clone-repo
                                           repo-name))
                              (when (progn
                                      (require 'gh-repo nil t)
                                      (fboundp 'gh-repo-tree))
-                               (buttonize "View repo "
+                               (buttonize "View repo"
                                           #'gh-repo-tree
                                           repo-name))))))
     (let ((inhibit-read-only t))

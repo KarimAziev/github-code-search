@@ -1,4 +1,4 @@
-;;; github-code-search.el --- Configure code search -*- lexical-binding: t -*-
+;;; github-code-search.el --- Search code on GitHub -*- lexical-binding: t -*-
 
 ;; Copyright (C) 2022 Karim Aziiev <karim.aziiev@gmail.com>
 

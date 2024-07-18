@@ -322,8 +322,21 @@ If other window doesn't exists, split selected window right."
 
 (defvar github-code-search-minibuffer-targets-finders
   '(github-code-search-minibuffer-ivy-selected-cand
+    github-code-search--vertico-selected
     github-code-search-get-minibuffer-get-default-completion)
   "List of functions to find minibuffer completion targets.")
+
+(declare-function vertico--candidate "ext:vertico")
+(declare-function vertico--update "ext:vertico")
+
+(defun github-code-search--vertico-selected ()
+  "Target the currently selected item in Vertico.
+Return the category metadatum as the type of the target."
+  (when (bound-and-true-p vertico--input)
+    (vertico--update)
+    (cons (completion-metadata-get (github-code-search-minibuffer-get-metadata)
+                                   'category)
+          (vertico--candidate))))
 
 (defun github-code-search-minibuffer-get-current-candidate ()
   "Retrieve the current candidate from the minibuffer."

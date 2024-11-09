@@ -344,7 +344,7 @@ Return the category metadatum as the type of the target."
     (run-hook-wrapped
      'github-code-search-minibuffer-targets-finders
      (lambda (fun)
-       (when-let ((result (funcall fun)))
+       (when-let* ((result (funcall fun)))
          (when (and (cdr-safe result)
                     (stringp (cdr-safe result))
                     (not (string-empty-p (cdr-safe result))))
@@ -357,7 +357,7 @@ Return the category metadatum as the type of the target."
   (when (eq this-command 'minibuffer-next-completion)
     (remove-hook 'post-command-hook
                  #'github-code-search-minibuffer-web-restore-completions-wind)
-    (when-let ((win (get-buffer-window "*Completions*" 0)))
+    (when-let* ((win (get-buffer-window "*Completions*" 0)))
       (fit-window-to-buffer win completions-max-height))))
 
 (defun github-code-search-minibuffer-action-no-exit (action)
@@ -367,7 +367,7 @@ Argument ACTION is a function to be called with the current minibuffer candidate
 as its argument."
   (pcase-let ((`(,_category . ,current)
                (github-code-search-minibuffer-get-current-candidate)))
-    (when-let ((win (get-buffer-window "*Completions*" 0)))
+    (when-let* ((win (get-buffer-window "*Completions*" 0)))
       (minimize-window win)
       (add-hook 'post-command-hook
                 #'github-code-search-minibuffer-web-restore-completions-wind))
@@ -395,7 +395,7 @@ as its argument."
            (github-code-search-preview-repo-file-action path)
          (and wnd
               (with-selected-window wnd
-                (when-let ((key (where-is-internal
+                (when-let* ((key (where-is-internal
                                  'exit-minibuffer
                                  minibuffer-mode-map
                                  t t
@@ -514,7 +514,7 @@ Remaining arguments ARGS are the arguments to be passed to the function FN."
             (with-selected-window buff-wnd
               (apply fn args))
           (apply fn args))
-        (when-let ((timer-value (symbol-value timer-sym)))
+        (when-let* ((timer-value (symbol-value timer-sym)))
           (when (timerp timer-value)
             (cancel-timer timer-value)))))))
 
@@ -530,7 +530,7 @@ executing FN.
 Argument FN is the function to be called after the delay.
 
 Remaining arguments ARGS are passed to FN when it is called."
-  (when-let ((timer-value (symbol-value timer-sym)))
+  (when-let* ((timer-value (symbol-value timer-sym)))
     (when (timerp timer-value)
       (cancel-timer timer-value)))
   (set timer-sym (apply #'run-with-timer delay nil
@@ -547,7 +547,7 @@ PATH is a string to match against the `path' key in each alist.
 
 PATHS is a list of alists, each representing a code item."
   (seq-find (lambda (alist)
-              (when-let ((item-path (cdr (assq 'path alist))))
+              (when-let* ((item-path (cdr (assq 'path alist))))
                 (string= item-path path)))
             paths))
 
@@ -865,7 +865,7 @@ retrieved file content."
       (url-retrieve url
                     (lambda (status &rest _)
                       (let ((buff (get-buffer buff-name)))
-                        (if-let ((err
+                        (if-let* ((err
                                   (github-code-search--get-status-error
                                    status)))
                             (progn
@@ -924,7 +924,7 @@ retrieved file content."
                                     (pop-to-buffer-same-window buff))
                                   (let ((wnd (get-buffer-window buff)))
                                     (with-selected-window wnd
-                                      (when-let ((found (re-search-forward
+                                      (when-let* ((found (re-search-forward
                                                          (regexp-quote
                                                           search-str)
                                                          nil t 1)))
@@ -1007,7 +1007,7 @@ Argument REPO is the name of the repository to view files from."
 (transient-define-prefix github-code-search-file-result-menu ()
   "Menu with a list of github code search results commands."
   [:description (lambda ()
-                  (if-let ((repo (github-code-search-current-buffer-repo)))
+                  (if-let* ((repo (github-code-search-current-buffer-repo)))
                       (format "Actions for repository %s" repo)
                     ""))
    [("f" "Find file" github-code-search-find-other-file
@@ -1021,7 +1021,7 @@ Argument REPO is the name of the repository to view files from."
      :description
      (lambda ()
        (concat "Browse "
-               (if-let ((repo (github-code-search-current-buffer-repo)))
+               (if-let* ((repo (github-code-search-current-buffer-repo)))
                    (concat "https://github.com/" repo)
                  "")))
      :inapt-if-not
@@ -1079,7 +1079,7 @@ Argument REPO is the name of the repository to view files from."
 
 (defun github-code-search-read-auth-marker ()
   "Retrieve and optionally save GitHub auth credentials."
-  (when-let ((variants
+  (when-let* ((variants
               (seq-uniq
                (auth-source-search
                 :host "api.github.com"
@@ -1190,7 +1190,7 @@ The default value is nil."
      (string-trim (buffer-substring-no-properties
                    (region-beginning)
                    (region-end))))
-   (when-let ((symb (symbol-at-point)))
+   (when-let* ((symb (symbol-at-point)))
      (symbol-name symb))))
 
 (defun github-code-search-query-from-alist (query-alist &optional keep-empty
@@ -1223,7 +1223,7 @@ Argument OBJ is an object to initialize with a language value."
             (hist-value (github-code-search--arg-value
                          "language" curr)))
       (oset obj value hist-value)
-    (when-let ((value
+    (when-let* ((value
                 (github-code-search-get-default-language)))
       (oset obj value value))))
 
@@ -1450,7 +1450,7 @@ results are returned, with the search results passed as an argument."
                                (let ((err
                                       (github-code-search--get-status-error
                                        status)))
-                                 (when-let
+                                 (when-let*
                                      ((buff
                                        (get-buffer
                                         github-code-search-result-buffer-name)))
@@ -1471,7 +1471,7 @@ results are returned, with the search results passed as an argument."
                   (lambda (value _headers status _req)
                     (let ((buffer (get-buffer
                                    github-code-search-result-buffer-name)))
-                      (when-let ((err
+                      (when-let* ((err
                                   (github-code-search--get-status-error
                                    status)))
                         (message err))
@@ -1509,7 +1509,7 @@ results are returned, with the search results passed as an argument."
   (pcase-let ((`(,beg . ,end)
                (save-excursion
                  (goto-char (point-min))
-                 (when-let ((prop (text-property-search-forward
+                 (when-let* ((prop (text-property-search-forward
                                    'github-code-search-pagination-button t
                                    'equal)))
                    (cons (prop-match-beginning prop)
@@ -1536,7 +1536,7 @@ results are returned, with the search results passed as an argument."
 
 (defun github-code-search-spinner-cleanup ()
   "Remove the spinner overlay."
-  (when-let ((ov (github-code-search-spinner-find-overlay)))
+  (when-let* ((ov (github-code-search-spinner-find-overlay)))
     (delete-overlay ov)))
 
 (defun github-code-search-spinner-overlay-make (start end &optional buffer
@@ -1574,7 +1574,7 @@ PROPS is a plist to put on overlay."
 Argument BUFFER is the buffer where the spinner update should occur."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
-      (when-let ((wnd (get-buffer-window buffer)))
+      (when-let* ((wnd (get-buffer-window buffer)))
         (with-selected-window wnd
           (pcase-let* ((`(,beg . ,end)
                         (github-code-search-get-pagination-button-bounds))
@@ -2142,7 +2142,7 @@ Argument QUERIES is a list of strings."
 Argument ARG is the name of the argument to search for in ARGS.
 
 Argument ARGS is a list of command-line arguments as strings."
-  (when-let ((argument (seq-find
+  (when-let* ((argument (seq-find
                         (apply-partially #'string-match-p
                                          (concat "--"
                                                  (regexp-quote
@@ -2380,7 +2380,7 @@ Optional argument ALIGN is the column to align the toggle indicator; defaults to
                                              (hist-value (github-code-search--arg-value
                                                           "code" curr)))
                                        (oset obj value hist-value)
-                                     (when-let ((value
+                                     (when-let* ((value
                                                  (cond
                                                   ((derived-mode-p
                                                     'github-code-search-result-mode)
@@ -2394,7 +2394,7 @@ Optional argument ALIGN is the column to align the toggle indicator; defaults to
                                                   ((oref obj value)
                                                    (oref obj value))
                                                   (t
-                                                   (when-let
+                                                   (when-let*
                                                        ((symb
                                                          (symbol-at-point)))
                                                      (symbol-name symb))))))
@@ -2466,11 +2466,11 @@ Optional argument ALIGN is the column to align the toggle indicator; defaults to
             (delete nil
                     (list
                      code-arg
-                     (if-let ((value
+                     (if-let* ((value
                                (github-code-search-get-default-language))
                               (l "--language="))
                          (concat l value)
-                       (if-let ((ext
+                       (if-let* ((ext
                                  (when buffer-file-name
                                    (file-name-extension
                                     buffer-file-name))))
@@ -2513,7 +2513,7 @@ the major mode."
 
 Argument STATUS is a plist containing the status information, including any
 error details."
-  (when-let ((err (plist-get status :error)))
+  (when-let* ((err (plist-get status :error)))
     (concat (propertize
              "github-code-search error: "
              'face
@@ -2521,7 +2521,7 @@ error details."
             (mapconcat (apply-partially #'format "%s")
                        (delq nil
                              (list (or
-                                    (when-let ((type
+                                    (when-let* ((type
                                                 (ignore-errors
                                                   (cadr
                                                    err))))
@@ -2672,7 +2672,7 @@ the fetch operation."
                                                   (funcall callback value)
                                                 tree)))
                                 :errorback (lambda (_err _headers status _req)
-                                             (if-let ((err
+                                             (if-let* ((err
                                                        (github-code-search--get-status-error
                                                         status)))
                                                  (funcall

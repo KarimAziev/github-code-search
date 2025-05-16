@@ -900,10 +900,11 @@ retrieved file content."
                                     (insert code))
                                   (setq buffer-file-name
                                         (expand-file-name
-                                         (substring-no-properties
-                                          buff-name
-                                          (length
-                                           github-code-search-file-buffer-name-prefix))
+                                         (file-name-nondirectory
+                                          (substring-no-properties
+                                           buff-name
+                                           (length
+                                            github-code-search-file-buffer-name-prefix)))
                                          default-directory))
                                   (github-code-search--set-major-mode
                                    buffer-file-name))

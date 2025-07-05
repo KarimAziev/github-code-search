@@ -866,8 +866,8 @@ retrieved file content."
                     (lambda (status &rest _)
                       (let ((buff (get-buffer buff-name)))
                         (if-let* ((err
-                                  (github-code-search--get-status-error
-                                   status)))
+                                   (github-code-search--get-status-error
+                                    status)))
                             (progn
                               (message err)
                               (when (buffer-live-p buff)
@@ -906,8 +906,9 @@ retrieved file content."
                                            (length
                                             github-code-search-file-buffer-name-prefix)))
                                          default-directory))
-                                  (github-code-search--set-major-mode
-                                   buffer-file-name))
+                                  (delay-mode-hooks
+                                    (github-code-search--set-major-mode
+                                     buffer-file-name)))
                                 (setq-local header-line-format
                                             (list " " 'header-line-indent
                                                   (buffer-name)
@@ -926,9 +927,9 @@ retrieved file content."
                                   (let ((wnd (get-buffer-window buff)))
                                     (with-selected-window wnd
                                       (when-let* ((found (re-search-forward
-                                                         (regexp-quote
-                                                          search-str)
-                                                         nil t 1)))
+                                                          (regexp-quote
+                                                           search-str)
+                                                          nil t 1)))
                                         (set-window-point wnd found)
                                         found))))))))))))))
 
